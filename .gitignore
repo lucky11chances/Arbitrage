@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Runtime data grows continuously while collectors run.
+data/history/
+data/*.log
+data/*.pid

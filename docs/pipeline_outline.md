@@ -146,9 +146,13 @@ ks_bid / ks_ask / ks_bid_sz / ks_ask_sz
 net_edge
 best_leg
 gross_cost
+best_leg_bbo_size
+net_profit_at_bbo
 raw PM identifiers
 raw KS identifiers
 ```
+
+`best_leg_bbo_size` is the smaller available size across the two BBO levels needed by the selected leg. It is a conservative top-of-book capacity, not a promise of realized fill.
 
 ### Compatibility Snapshot
 

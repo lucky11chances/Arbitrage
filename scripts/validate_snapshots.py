@@ -35,6 +35,8 @@ BINARY_REQUIRED_FIELDS = [
     "net_edge",
     "best_leg",
     "gross_cost",
+    "best_leg_bbo_size",
+    "net_profit_at_bbo",
     "pm_event_slug",
     "pm_market_id",
     "pm_token_id",
@@ -84,9 +86,12 @@ def validate_binary(universe: str, path: Path) -> dict[str, Any]:
         if missing:
             raise AssertionError(f"{path}:{index} empty required fields: {', '.join(missing)}")
         edge = float(row["net_edge"])
+        bbo_size = float(row["best_leg_bbo_size"])
         max_edge = edge if max_edge is None else max(max_edge, edge)
         if edge > 0.30:
             raise AssertionError(f"{path}:{index} net_edge over 30%: {edge}")
+        if bbo_size < 0:
+            raise AssertionError(f"{path}:{index} best_leg_bbo_size is negative: {bbo_size}")
         if universe in {"lol", "valorant"} and not row["schedule_source"].startswith("riot_"):
             raise AssertionError(f"{path}:{index} esports row lacks Riot official schedule source")
     return {"rows": len(rows), "max_edge": max_edge}

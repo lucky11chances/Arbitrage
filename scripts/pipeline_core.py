@@ -38,6 +38,8 @@ BINARY_CSV_FIELDS = [
     "net_edge",
     "best_leg",
     "gross_cost",
+    "best_leg_bbo_size",
+    "net_profit_at_bbo",
     "pm_event_slug",
     "pm_market_id",
     "pm_token_id",
@@ -301,6 +303,20 @@ def best_net(pm_bid: float | None, pm_ask: float | None, ks_bid: float | None, k
     return NetEdge("PM_NO_KS_YES", round(net_b, 6), round(cost_b, 6))
 
 
+def best_leg_bbo_size(best_leg: str | None, pm_bbo: BBO, ks_bbo: BBO) -> float | None:
+    if best_leg == "PM_YES_KS_NO":
+        return min_optional(pm_bbo.ask_size, ks_bbo.bid_size)
+    if best_leg == "PM_NO_KS_YES":
+        return min_optional(pm_bbo.bid_size, ks_bbo.ask_size)
+    return None
+
+
+def min_optional(left: float | None, right: float | None) -> float | None:
+    if left is None or right is None:
+        return None
+    return min(left, right)
+
+
 def build_binary_rows(pairs: list[PairedContract], max_workers: int = 12) -> tuple[list[dict[str, Any]], list[str]]:
     ts_utc = datetime.now(timezone.utc).isoformat()
     rows: list[dict[str, Any]] = []
@@ -327,6 +343,8 @@ def build_binary_rows(pairs: list[PairedContract], max_workers: int = 12) -> tup
             )
             continue
         edge = best_net(pm_bbo.bid, pm_bbo.ask, ks_bbo.bid, ks_bbo.ask)
+        bbo_size = best_leg_bbo_size(edge.leg, pm_bbo, ks_bbo)
+        net_profit_at_bbo = round(edge.net_edge * bbo_size, 6) if edge.net_edge is not None and bbo_size is not None else None
         rows.append(
             {
                 "ts_utc": ts_utc,
@@ -349,6 +367,8 @@ def build_binary_rows(pairs: list[PairedContract], max_workers: int = 12) -> tup
                 "net_edge": edge.net_edge,
                 "best_leg": edge.leg,
                 "gross_cost": edge.gross_cost,
+                "best_leg_bbo_size": bbo_size,
+                "net_profit_at_bbo": net_profit_at_bbo,
                 "pm_event_slug": pair.pm_event_slug,
                 "pm_market_id": pair.pm_market_id,
                 "pm_token_id": pair.pm_token_id,

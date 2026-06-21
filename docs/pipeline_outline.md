@@ -52,7 +52,10 @@ Examples:
 - NBA adapter
 - Esports adapter
 - Soccer / World Cup adapter
+- Polymarket sports inventory adapter
 - Future politics adapter
+
+The sports implementation now uses one adapter module per Polymarket Sports category. Inventory-only adapters write PM coverage rows only; paired adapters additionally produce `PairedContract` rows for the common binary arb engine.
 
 Adapter responsibilities:
 
@@ -127,6 +130,32 @@ Do not use broad fuzzy matching for production pairing. A missed pair is less da
 
 ## Snapshot Types
 
+### Polymarket Sports Inventory Snapshot
+
+Used for all Polymarket Sports categories, including categories that are not yet safe to pair with Kalshi.
+
+Fields include:
+
+```text
+category_key
+category_label
+tag_slug
+event_slug
+event_title
+market_id
+market_question
+market_type_guess
+outcomes
+arb_universe
+arb_enabled
+kalshi_series_ticker
+pairing_status
+schedule_source
+risk_level
+```
+
+Inventory rows do not fetch BBO and do not compute `net_edge`. They are the coverage/debug source that tells us which sports markets exist and which ones still need official schedules or Kalshi adapters.
+
 ### Binary Arb Snapshot
 
 Used when both venues represent the same binary Yes/No contract.
@@ -194,12 +223,27 @@ Current handling:
 - CS2: header-only until a Valve or official organizer schedule adapter is configured. Name-only PM/Kalshi pairing is disabled.
 - LoL: binary esports snapshot at `data/lol_arb_snapshot_latest.csv`; pairs only when PM and Kalshi both match a concrete Riot LoL Esports official schedule match.
 - Valorant: binary esports snapshot at `data/valorant_arb_snapshot_latest.csv`; pairs only when PM and Kalshi both match a concrete Riot Valorant Esports official schedule match.
-- World Cup / soccer: compatibility snapshot only while markets are 3-way with Tie.
+- World Cup / soccer: binary outcome snapshot. The adapter pairs PM/Kalshi Team A win, Draw/Tie, and Team B win contracts through a local FIFA World Cup 2026 group-stage schedule.
+- Polymarket Sports inventory: all listed sports categories are tracked at `data/polymarket_sports_inventory_latest.csv`; only registry entries with `arb_enabled=true` flow into binary arb rows.
+- Per-sport inventory: every adapter writes `data/sports/<sport>_latest.csv`.
+- Formula 1 is keyed by Polymarket `/sports` metadata (`sport=f1`, `tag_id=435`, `series=11635`) rather than a guessed `formula-1` tag slug.
 
 Current command:
 
 ```bash
 python3 scripts/build_all_snapshots.py --show-warnings
+```
+
+All-sports inventory command:
+
+```bash
+python3 scripts/build_all_snapshots.py --sports all --show-warnings
+```
+
+Single-adapter debug command:
+
+```bash
+python3 scripts/run_sport_snapshot.py --sport formula_1 --show-warnings
 ```
 
 Validation command:
@@ -211,6 +255,9 @@ python3 scripts/validate_snapshots.py
 The standalone discovery/pair/build scripts have been consolidated into the unified runner plus shared modules:
 
 - `scripts/build_all_snapshots.py`
+- `scripts/run_snapshot_loop.py`
+- `scripts/run_sport_snapshot.py`
+- `scripts/sports_adapters/`
 - `scripts/pipeline_core.py`
 - `scripts/universe_adapters.py`
 - `scripts/nba_common.py`
@@ -221,7 +268,9 @@ The standalone discovery/pair/build scripts have been consolidated into the unif
 - Each script can run once and write a snapshot.
 - Active binary universes write BBO + net-edge rows.
 - Non-binary universes write compatibility rows and explicit skip reasons.
+- World Cup soccer outcome contracts write BBO + net-edge rows for Team A win, Draw/Tie, and Team B win.
 - Unmatched or ambiguous pairs produce warnings.
 - Latest snapshots are overwritten.
 - Daily history is appended.
+- `data/alerts/` contains the current opportunity CSV plus a human-readable summary or no-alert marker.
 - A unified runner can execute all current universes without changing their separate outputs.

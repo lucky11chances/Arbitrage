@@ -26,10 +26,16 @@
 python3 scripts/build_all_snapshots.py --show-warnings
 ```
 
+跑 Polymarket Sports 全分类 inventory，并只对安全启用的 universe 计算 PM/Kalshi arb：
+
+```bash
+python3 scripts/build_all_snapshots.py --sports all --show-warnings
+```
+
 只跑指定 universe：
 
 ```bash
-python3 scripts/build_all_snapshots.py --sports mlb,nba --show-warnings
+python3 scripts/build_all_snapshots.py --sports mlb,nba,soccer --show-warnings
 ```
 
 测试时不写 history：
@@ -40,23 +46,48 @@ python3 scripts/build_all_snapshots.py --show-warnings --no-history
 
 它会写 `data/*_latest.csv`，并在非 `--no-history` 模式下追加 `data/history/*_YYYY-MM-DD.csv`。
 
-### `scripts/run_mlb_nba_loop.py`
+### `scripts/run_snapshot_loop.py`
 
-MLB/NBA 的持续采集 loop。
+主 orchestrator。它加载每个 sport adapter，统一写 per-sport inventory、safe arb snapshots、history 和 alert。
 
 当前推荐命令：
 
 ```bash
-python3 -u scripts/run_mlb_nba_loop.py --interval 5 --sports mlb,nba --show-warnings --bbo-workers 20 2>&1 | tee -a data/mlb_nba_loop.log
+python3 -u scripts/run_snapshot_loop.py --interval 5 --sports mlb,nba,soccer --show-warnings --bbo-workers 20 2>&1 | tee -a data/snapshot_loop.log
+```
+
+全分类 inventory + 安全 arb universe 的命令：
+
+```bash
+python3 -u scripts/run_snapshot_loop.py --sports all --interval 5 --bbo-workers 20 --show-warnings
 ```
 
 特点：
 
-- 只支持 `mlb,nba`。
+- 支持 `--sports all`，也支持 `--sports tennis`、`--sports formula_1`、`--sports mlb,nba,world_cup`。
+- `--sports all` 会调用全部 sport adapters；只有 `arb_status=paired` 的 adapter 会计算 PM/Kalshi `net_edge`。
 - 每轮刷新 BBO / net edge。
 - 默认每 5 分钟刷新一次比赛配对缓存，避免每 5 秒重复做 discovery / official schedule pairing。
+- `--sports all` 或 `--inventory` 会每 5 分钟刷新一次 `data/polymarket_sports_inventory_latest.csv` 和 `data/sports/*_latest.csv`。
 - 每轮追加 history。
+- 每轮打印 `positive_edges` 和 `max_edge`，方便快速看到有没有正 net edge。
+- 每轮更新 `data/arb_alerts_latest.csv`；如果有正 edge，会追加 `data/history/arb_alerts_YYYY-MM-DD.csv`。
+- 每轮更新 `data/alerts/`，里面有当前机会的 CSV 和文字摘要。
 - 单轮如果超过 5 秒，会在 log 中输出 warning。
+
+`scripts/run_mlb_nba_loop.py` 仍保留为兼容入口，实际委托给 `run_snapshot_loop.py`。
+
+### `scripts/run_sport_snapshot.py`
+
+单 sport adapter 调试入口。
+
+```bash
+python3 scripts/run_sport_snapshot.py --sport tennis
+python3 scripts/run_sport_snapshot.py --sport formula_1
+python3 scripts/run_sport_snapshot.py --sport world_cup --show-warnings
+```
+
+inventory-only sports 只写 `data/sports/<sport>_latest.csv`。已启用严格配对的 sports 还会写对应 arb CSV。
 
 ### `scripts/pipeline_core.py`
 
@@ -101,7 +132,46 @@ KS_fee = 0.07 * p * (1 - p)
 - LoL：只保留能匹配 Riot LoL Esports 官方 schedule 的比赛。
 - Valorant：只保留能匹配 Riot Valorant Esports 官方 schedule 的比赛。
 - CS2：当前 header-only。因为还没有接入可靠的 Valve 或赛事主办方官方 schedule adapter，不做名称硬配。
-- World Cup soccer：当前输出 compatibility snapshot。遇到 3-way / Tie 市场时跳过二元套利公式。
+- World Cup soccer：使用本地 FIFA World Cup 2026 group-stage schedule 做日期 + 国家配对；逐 outcome 配对 Team A win / Draw / Team B win。
+
+### `scripts/sports_registry.py`
+
+Polymarket Sports 全分类 registry。
+
+当前 registry 覆盖截图中的 sports，再加 onboarding 明确要求的 NBA：
+
+```text
+World Cup, MLB, NBA, UFC, Football, Soccer, Tennis, Cricket, Basketball,
+Baseball, Rugby, Table Tennis, Golf, Formula 1, Boxing, Pickleball,
+Lacrosse, Hockey, Esports
+```
+
+每个 category 记录 PM sport code、tag id、tag slug、series、resolution source、adapter name、market focus、是否启用 arb、Kalshi series、schedule source 和当前风险状态。
+
+Formula 1 使用 Polymarket `/sports` 里的真实 metadata：`sport=f1`、`tag_id=435`、`series=11635`。不要用猜测的 `formula-1` slug。
+
+### `scripts/sports_adapters/`
+
+每个截图 sport 一个 adapter module：
+
+```text
+world_cup, mlb, nba, ufc, football, soccer, tennis, cricket, basketball,
+baseball, rugby, table_tennis, golf, formula_1, boxing, pickleball,
+lacrosse, hockey, esports
+```
+
+MLB / NBA / World Cup 当前是 `paired` adapter，会输出 arb rows。其他 adapter 目前是 `inventory_only`，不会写 `net_edge`，避免误报。
+
+### `scripts/sports_inventory.py`
+
+全分类 Polymarket discovery 层。
+
+负责：
+
+- 按 registry 抓取所有 Polymarket Sports category 的 open events / markets。
+- 写出 `data/polymarket_sports_inventory_latest.csv`。
+- 标注哪些 category 只是 inventory，哪些可以进入 PM/Kalshi arb。
+- 不拉 BBO，不计算 edge；inventory 是市场覆盖和 debug 索引，不是套利信号。
 
 ### `scripts/nba_common.py`
 
@@ -132,7 +202,8 @@ python3 scripts/validate_snapshots.py
 - `net_edge > 30%` 是否为 0。
 - LoL / Valorant 是否带 Riot official schedule source。
 - CS2 是否保持 header-only。
-- soccer compatibility CSV 是否不包含 `net_edge`，且全部 `skip_binary_arb=True`。
+- soccer binary rows 是否都映射到本地 World Cup schedule，且 PM/KS outcome 一致，包括 draw/tie 对 draw/tie。
+- 如果全分类 inventory CSV 存在，则逐行检查必要字段和 category/market 类型。
 
 ## 输出文件
 
@@ -147,6 +218,8 @@ data/cs2_arb_snapshot_latest.csv
 data/lol_arb_snapshot_latest.csv
 data/valorant_arb_snapshot_latest.csv
 data/worldcup_soccer_snapshot_latest.csv
+data/polymarket_sports_inventory_latest.csv
+data/sports/<sport>_latest.csv
 ```
 
 注意：latest CSV 不会变得很长。例如 MLB 当前是一场比赛两个方向，所以大概是：
@@ -166,13 +239,14 @@ data/history/cs2_arb_snapshot_YYYY-MM-DD.csv
 data/history/lol_arb_snapshot_YYYY-MM-DD.csv
 data/history/valorant_arb_snapshot_YYYY-MM-DD.csv
 data/history/worldcup_soccer_snapshot_YYYY-MM-DD.csv
+data/history/polymarket_sports_inventory_YYYY-MM-DD.csv
 ```
 
 `data/history/` 默认不提交 GitHub，因为它会持续增长，适合保存在本地采集机器或后续迁移到对象存储。
 
 ## Binary Arb CSV 格式
 
-用于 MLB / NBA / LoL / Valorant 等二元套利 universe。
+用于 MLB / NBA / World Cup soccer / LoL / Valorant 等二元套利 universe。
 
 字段：
 
@@ -199,6 +273,9 @@ best_leg
 gross_cost
 best_leg_bbo_size
 net_profit_at_bbo
+alert
+alert_threshold
+alert_reason
 pm_event_slug
 pm_market_id
 pm_token_id
@@ -215,54 +292,62 @@ schedule_source
 - `*_sz`：对应 BBO 档位上的 size。
 - `gross_cost`：选中 best leg 后，买两边合约的总成本，不含 fee。
 - `net_edge`：`1 - gross_cost - fees`，大于 0 才是理论套利。
+- `alert`：`net_edge > 0` 时为 `ALERT`，否则为空。
+- `alert_reason`：当前为 `net_edge_positive`。
 - `best_leg`：
   - `PM_YES_KS_NO`：买 PM Yes + 买 KS No。
   - `PM_NO_KS_YES`：买 PM No + 买 KS Yes。
 - `best_leg_bbo_size`：best leg 两边 BBO 可成交 size 的较小值。例如 `PM_YES_KS_NO` 使用 `min(pm_ask_sz, ks_bid_sz)`。
 - `net_profit_at_bbo`：`net_edge * best_leg_bbo_size`，只是 top-of-book 理论值，不代表真实成交一定可得。
-- `schedule_source`：用于说明配对依据，例如 `mlb_stats_api` 或 Riot 官方 schedule。
+- `schedule_source`：用于说明配对依据，例如 `mlb_stats_api`、`fifa_world_cup_2026_local_schedule` 或 Riot 官方 schedule。
 
-## Soccer Compatibility CSV 格式
+## World Cup Soccer 配对
 
-World Cup / soccer 当前不直接计算套利，因为很多市场是三结果：
-
-```text
-Team A / Tie / Team B
-```
-
-三结果市场不能套用二元 Yes/No 套利公式。
-
-字段：
+World Cup soccer 当前按三结果逐项二元合约计算套利：
 
 ```text
-ts_utc
-source
-universe
-event_id
-title
-event_date
-market_count
-outcomes
-is_binary_candidate
-skip_binary_arb
-reason
+Team A wins / Team A does not win
+Draw / Not draw
+Team B wins / Team B does not win
 ```
 
-如果 `skip_binary_arb=True`，说明该行只用于兼容性观察，不参与 `net_edge` 计算。
+也就是说 Kalshi 的 `Germany` 对 PM 的 `Germany win`，Kalshi 的 `Tie` 对 PM 的 `draw`，Kalshi 的 `Argentina` 对 PM 的 `Argentina win`。配对依赖本地 FIFA World Cup 2026 group-stage schedule，canonical id 形如 `worldcup_soccer:2026-06-15:belgium:egypt`。
+
+## Alert CSV
+
+每轮 collector 会从所有 snapshot rows 中筛出 `net_edge > 0` 的行：
+
+```text
+data/arb_alerts_latest.csv
+data/history/arb_alerts_YYYY-MM-DD.csv
+```
+
+`arb_alerts_latest.csv` 每轮覆盖，只保留当前这一轮的正 edge；history alert 文件只在出现正 edge 时追加。
+
+同时会写一个更适合人工查看的文件夹：
+
+```text
+data/alerts/latest_opportunities.csv
+data/alerts/latest_opportunities.txt
+data/alerts/ALERT_ACTIVE.txt
+data/alerts/NO_CURRENT_ALERTS.txt
+```
+
+当前没有机会时，会存在 `NO_CURRENT_ALERTS.txt`。只要出现机会，`ALERT_ACTIVE.txt` 会出现，并列出 sport、比赛、outcome、`net_edge`、`best_leg`、PM event/token 和 Kalshi market ticker。
 
 ## 当前运行建议
 
-在稳定设备上长期跑 MLB/NBA：
+在稳定设备上长期跑 MLB/NBA/World Cup soccer：
 
 ```bash
 cd /path/to/Arbitrage
-python3 -u scripts/run_mlb_nba_loop.py --interval 5 --sports mlb,nba --show-warnings --bbo-workers 20 2>&1 | tee -a data/mlb_nba_loop.log
+python3 -u scripts/run_snapshot_loop.py --interval 5 --sports mlb,nba,soccer --show-warnings --bbo-workers 20 2>&1 | tee -a data/snapshot_loop.log
 ```
 
 查看实时日志：
 
 ```bash
-tail -f data/mlb_nba_loop.log
+tail -f data/snapshot_loop.log
 ```
 
 查看最新 snapshot：

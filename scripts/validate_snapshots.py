@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import sports_inventory
+import sports_pairing
 import sports_registry
 import universe_adapters
 
@@ -17,8 +18,10 @@ BINARY_FILES = {
     "cs2": Path("data/cs2_arb_snapshot_latest.csv"),
     "lol": Path("data/lol_arb_snapshot_latest.csv"),
     "valorant": Path("data/valorant_arb_snapshot_latest.csv"),
+    "formula_1": Path("data/formula_1_arb_snapshot_latest.csv"),
 }
 INVENTORY_FILE = Path("data/polymarket_sports_inventory_latest.csv")
+PAIRING_DIAGNOSTICS_FILE = Path("data/pairing_diagnostics_latest.csv")
 ALERT_DIR = Path("data/alerts")
 SPORT_FILES = {
     category.key: Path("data/sports") / f"{category.key}_latest.csv"
@@ -94,6 +97,8 @@ def validate_binary(universe: str, path: Path) -> dict[str, Any]:
             raise AssertionError(f"{path}:{index} best_leg_bbo_size is negative: {bbo_size}")
         if universe == "soccer":
             validate_soccer_binary_row(path, index, row)
+        if universe == "formula_1":
+            validate_formula_1_binary_row(path, index, row)
         if universe in {"lol", "valorant"} and not row["schedule_source"].startswith("riot_"):
             raise AssertionError(f"{path}:{index} esports row lacks Riot official schedule source")
     return {"rows": len(rows), "max_edge": max_edge}
@@ -126,6 +131,49 @@ def validate_alert_fields(path: Path, index: int, row: dict[str, str], edge: flo
         raise AssertionError(f"{path}:{index} positive net_edge missing ALERT marker")
     if edge <= 0 and alert:
         raise AssertionError(f"{path}:{index} non-positive net_edge has alert marker: {alert}")
+
+
+def validate_formula_1_binary_row(path: Path, index: int, row: dict[str, str]) -> None:
+    if row["market_type"] != "future_winner":
+        raise AssertionError(f"{path}:{index} Formula 1 row has unexpected market_type: {row['market_type']}")
+    if not row["ks_event_ticker"].startswith("KXF1-"):
+        raise AssertionError(f"{path}:{index} Formula 1 row does not use KXF1: {row['ks_event_ticker']}")
+    if not row["canonical_event_id"].endswith(":single:formula1f1driverschampionship"):
+        raise AssertionError(f"{path}:{index} Formula 1 row is not Drivers Championship exact proposition")
+    pm_outcome = sports_pairing.outcome_key(row["pm_yes_outcome"])
+    ks_outcome = sports_pairing.outcome_key(row["ks_yes_outcome"])
+    if pm_outcome != ks_outcome:
+        raise AssertionError(
+            f"{path}:{index} Formula 1 PM/KS outcome mismatch: {row['pm_yes_outcome']} vs {row['ks_yes_outcome']}"
+        )
+
+
+def validate_pairing_diagnostics(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"rows": 0, "status": "missing"}
+    fields, rows = read_csv(path)
+    require_fields(path, fields, sports_pairing.DIAGNOSTIC_FIELDS)
+    if "net_edge" in fields or "alert" in fields:
+        raise AssertionError(f"{path} diagnostics must not include executable edge/alert fields")
+    allowed_statuses = {
+        "paired",
+        "paired_existing",
+        "no_ks_open_markets",
+        "pm_only_inventory",
+        "unmatched_semantics",
+        "ambiguous_match",
+    }
+    safe_rows = 0
+    for index, row in enumerate(rows, start=2):
+        if row.get("status") not in allowed_statuses:
+            raise AssertionError(f"{path}:{index} unexpected diagnostics status: {row.get('status')}")
+        if row.get("safe_paired") == "true":
+            safe_rows += 1
+            if row.get("status") not in {"paired", "paired_existing"}:
+                raise AssertionError(f"{path}:{index} unsafe status marked safe_paired=true: {row.get('status')}")
+        elif row.get("safe_paired") != "false":
+            raise AssertionError(f"{path}:{index} safe_paired must be true/false: {row.get('safe_paired')}")
+    return {"rows": len(rows), "safe_paired": safe_rows, "status": "ok"}
 
 
 def validate_inventory(path: Path) -> dict[str, Any]:
@@ -197,6 +245,7 @@ def main() -> None:
     for universe, path in BINARY_FILES.items():
         summaries[universe] = validate_binary(universe, path)
     summaries["inventory"] = validate_inventory(INVENTORY_FILE)
+    summaries["pairing_diagnostics"] = validate_pairing_diagnostics(PAIRING_DIAGNOSTICS_FILE)
     for key, path in SPORT_FILES.items():
         summaries[f"sport:{key}"] = validate_sport_inventory(key, path)
     summaries["alert_folder"] = validate_alert_folder(ALERT_DIR)

@@ -8,5 +8,6 @@ data/*.log
 data/*.pid
 data/alerts/
 data/sports/
+data/staging/
 data/arb_alerts_latest.csv
 data/polymarket_sports_inventory_latest.csv

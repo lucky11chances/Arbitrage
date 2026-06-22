@@ -13,6 +13,7 @@ import build_all_snapshots
 import pipeline_core as core
 import sports_adapters
 import sports_inventory
+import sports_pairing
 import sports_registry
 from sports_adapters.base import SportAdapter
 
@@ -20,6 +21,7 @@ from sports_adapters.base import SportAdapter
 DEFAULT_SPORTS = ("mlb", "nba", "world_cup")
 STOP = False
 PAIR_CACHE: dict[str, tuple[float, list[core.PairedContract]]] = {}
+DIAGNOSTICS_CACHE: dict[str, tuple[float, list[dict[str, object]]]] = {}
 INVENTORY_NEXT_REFRESH = 0.0
 
 
@@ -82,12 +84,36 @@ def get_pairs(adapter: SportAdapter, args: argparse.Namespace) -> tuple[list[cor
     return pairs, warnings
 
 
+def get_pairing_diagnostics(adapter: SportAdapter, args: argparse.Namespace) -> tuple[list[dict[str, object]], list[str]]:
+    now = time.monotonic()
+    cached = DIAGNOSTICS_CACHE.get(adapter.key)
+    if cached is not None and now < cached[0]:
+        return cached[1], []
+
+    rows, warnings = adapter.build_pairing_diagnostics(args.pm_limit, args.ks_limit, args.from_date or None)
+    DIAGNOSTICS_CACHE[adapter.key] = (now + args.pair_refresh_seconds, rows)
+    warnings.append(f"diagnostics cache refreshed; rows={len(rows)}; ttl_sec={args.pair_refresh_seconds:.1f}")
+    return rows, warnings
+
+
 def run_iteration(args: argparse.Namespace, iteration: int) -> None:
     started = time.monotonic()
     paired = sports_adapters.paired_adapters(args.adapters)
     log(f"iteration {iteration} start; adapters={','.join(adapter.key for adapter in args.adapters)}")
     maybe_write_inventory_csv(args)
     all_rows: list[dict[str, object]] = []
+    diagnostic_rows: list[dict[str, object]] = []
+    for adapter in args.adapters:
+        try:
+            rows, warnings = get_pairing_diagnostics(adapter, args)
+            diagnostic_rows.extend(rows)
+            if args.show_warnings:
+                for warning in warnings:
+                    log(f"{adapter.key} diagnostics warning: {warning}")
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not stop executable pair snapshots.
+            log(f"{adapter.key} diagnostics error: {exc}")
+            traceback.print_exc()
+    write_pairing_diagnostics_csv(diagnostic_rows)
     for adapter in paired:
         try:
             all_rows.extend(run_adapter(adapter, args))
@@ -123,6 +149,11 @@ def write_alert_csv(rows: list[dict[str, object]], args: argparse.Namespace) -> 
     if alerts and not args.no_history:
         core.append_history_csv(alerts, core.BINARY_CSV_FIELDS, build_all_snapshots.alert_history_path(args.history_dir))
     return len(alerts)
+
+
+def write_pairing_diagnostics_csv(rows: list[dict[str, object]]) -> None:
+    core.write_latest_csv(rows, sports_pairing.DIAGNOSTIC_FIELDS, Path(build_all_snapshots.PAIRING_DIAGNOSTICS_OUTPUT))
+    log(f"diagnostics: wrote {len(rows)} rows to {build_all_snapshots.PAIRING_DIAGNOSTICS_OUTPUT}")
 
 
 def maybe_write_inventory_csv(args: argparse.Namespace) -> None:

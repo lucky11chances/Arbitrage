@@ -9,11 +9,12 @@ from pathlib import Path
 import pipeline_core as core
 import sports_adapters
 import sports_inventory
+import sports_pairing
 import sports_registry
 from sports_adapters.base import SportAdapter
 
 
-BINARY_UNIVERSES = ("mlb", "nba", "soccer", "cs2", "lol", "valorant")
+BINARY_UNIVERSES = ("mlb", "nba", "soccer", "formula_1", "cs2", "lol", "valorant")
 SUPPORTED_UNIVERSES = BINARY_UNIVERSES
 DEFAULT_OUTPUTS = {
     "mlb": "data/mlb_arb_snapshot_latest.csv",
@@ -22,10 +23,12 @@ DEFAULT_OUTPUTS = {
     "lol": "data/lol_arb_snapshot_latest.csv",
     "valorant": "data/valorant_arb_snapshot_latest.csv",
     "soccer": "data/worldcup_soccer_snapshot_latest.csv",
+    "formula_1": "data/formula_1_arb_snapshot_latest.csv",
 }
 ALERT_OUTPUT = "data/arb_alerts_latest.csv"
 ALERT_DIR = "data/alerts"
 INVENTORY_OUTPUT = "data/polymarket_sports_inventory_latest.csv"
+PAIRING_DIAGNOSTICS_OUTPUT = "data/pairing_diagnostics_latest.csv"
 SPORT_OUTPUT_DIR = "data/sports"
 HISTORY_PREFIXES = {
     "mlb": "mlb_arb_snapshot",
@@ -34,6 +37,7 @@ HISTORY_PREFIXES = {
     "lol": "lol_arb_snapshot",
     "valorant": "valorant_arb_snapshot",
     "soccer": "worldcup_soccer_snapshot",
+    "formula_1": "formula_1_arb_snapshot",
 }
 ALERT_HISTORY_PREFIX = "arb_alerts"
 INVENTORY_HISTORY_PREFIX = "polymarket_sports_inventory"
@@ -90,6 +94,12 @@ def run_sport_inventory(adapter: SportAdapter, args: argparse.Namespace) -> list
     return rows
 
 
+def run_pairing_diagnostics(adapter: SportAdapter, args: argparse.Namespace) -> list[dict[str, object]]:
+    rows, warnings = adapter.build_pairing_diagnostics(args.pm_limit, args.ks_limit, args.from_date or None)
+    print_warnings(f"{adapter.key} diagnostics", warnings, args.show_warnings)
+    return rows
+
+
 def alert_history_path(history_dir: str) -> Path:
     today = datetime.now(timezone.utc).date().isoformat()
     return Path(history_dir) / f"{ALERT_HISTORY_PREFIX}_{today}.csv"
@@ -118,6 +128,12 @@ def write_inventory_csv(args: argparse.Namespace, rows: list[dict[str, object]] 
         core.append_history_csv(rows, sports_inventory.INVENTORY_FIELDS, inventory_history_path(args.history_dir))
     print_warnings("inventory", warnings, args.show_warnings)
     print(f"{datetime.now(timezone.utc).isoformat()} inventory: wrote {len(rows)} rows to {INVENTORY_OUTPUT}")
+    return len(rows)
+
+
+def write_pairing_diagnostics_csv(rows: list[dict[str, object]]) -> int:
+    core.write_latest_csv(rows, sports_pairing.DIAGNOSTIC_FIELDS, Path(PAIRING_DIAGNOSTICS_OUTPUT))
+    print(f"{datetime.now(timezone.utc).isoformat()} diagnostics: wrote {len(rows)} rows to {PAIRING_DIAGNOSTICS_OUTPUT}")
     return len(rows)
 
 
@@ -163,10 +179,13 @@ def main() -> None:
 
     all_rows: list[dict[str, object]] = []
     inventory_rows: list[dict[str, object]] = []
+    diagnostic_rows: list[dict[str, object]] = []
     for adapter in args.adapters:
         inventory_rows.extend(run_sport_inventory(adapter, args))
+        diagnostic_rows.extend(run_pairing_diagnostics(adapter, args))
         if adapter.category.arb_status == "paired":
             all_rows.extend(run_binary_adapter(adapter, args))
+    write_pairing_diagnostics_csv(diagnostic_rows)
     alert_count = write_alert_csv(all_rows, args)
     print(f"alert summary: wrote {alert_count} rows to {ALERT_OUTPUT}")
     if should_write_inventory(args):

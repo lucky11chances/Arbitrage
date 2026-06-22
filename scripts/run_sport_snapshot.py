@@ -9,6 +9,7 @@ import build_all_snapshots
 import pipeline_core as core
 import sports_adapters
 import sports_inventory
+import sports_pairing
 
 
 def main() -> None:
@@ -39,6 +40,13 @@ def main() -> None:
         for warning in inventory_warnings:
             print(f"{adapter.key} warning: {warning}")
     print(f"{adapter.key}: wrote {len(inventory_rows)} inventory rows to {sport_output}")
+
+    diagnostic_rows, diagnostic_warnings = adapter.build_pairing_diagnostics(args.pm_limit, args.ks_limit, args.from_date or None)
+    core.write_latest_csv(diagnostic_rows, sports_pairing.DIAGNOSTIC_FIELDS, Path(build_all_snapshots.PAIRING_DIAGNOSTICS_OUTPUT))
+    if args.show_warnings:
+        for warning in diagnostic_warnings:
+            print(f"{adapter.key} diagnostics warning: {warning}")
+    print(f"{adapter.key}: wrote {len(diagnostic_rows)} pairing diagnostics rows to {build_all_snapshots.PAIRING_DIAGNOSTICS_OUTPUT}")
 
     if adapter.category.arb_status != "paired":
         print(f"{adapter.key}: inventory-only; no arb snapshot written")

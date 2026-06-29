@@ -37,6 +37,7 @@ DIAGNOSTIC_FIELDS = [
     "outcome_key",
 ]
 MATCH_SOURCE = "date_entity_semantic_match"
+NORMAL_SPORTS_MARKET_TYPES = {"game_winner", "match_winner", "three_way_moneyline"}
 
 VS_RE = re.compile(r"^(?P<a>.+?)\s+(?:vs\.?|v\.?|at|@)\s+(?P<b>.+?)(?:\s+\(|$)", re.IGNORECASE)
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
@@ -143,17 +144,29 @@ def yes_no_outcome(question: str) -> str:
 
 def market_type_for(category_key: str, outcomes: list[str], question: str) -> str:
     lowered = [outcome.strip().lower() for outcome in outcomes]
+    question_lower = question.lower()
+    if "spread" in question_lower or "handicap" in question_lower:
+        return "spread"
+    if "total" in question_lower or "over" in question_lower or "under" in question_lower:
+        return "total"
+    if category_key == "tennis" and re.search(r"\bset\s*\d+\b|\bset winner\b", question_lower):
+        return "set_winner"
+    if len(outcomes) == 2 and set(lowered) == {"over", "under"}:
+        return "total"
+    if any("spread" in outcome or "handicap" in outcome for outcome in lowered):
+        return "spread"
+    if any(re.search(r"(?:^|\s)[+-]\d", outcome) for outcome in lowered):
+        return "spread"
     if len(outcomes) == 3 and any(universe_adapters.is_draw_or_tie(outcome) for outcome in outcomes):
         return "three_way_moneyline"
+    if len(outcomes) == 2 and lowered == ["yes", "no"]:
+        if "championship" in question_lower or "tournament" in question_lower:
+            return "future_winner"
+        return "proposition_yes"
     if category_key in {"formula_1", "golf"}:
         return "future_winner"
     if category_key in {"ufc", "boxing", "tennis", "table_tennis", "pickleball"}:
         return "match_winner"
-    if len(outcomes) == 2 and lowered == ["yes", "no"]:
-        question_lower = question.lower()
-        if "championship" in question_lower or "tournament" in question_lower:
-            return "future_winner"
-        return "proposition_yes"
     return "game_winner"
 
 
@@ -191,7 +204,17 @@ def pm_candidates(category: sports_registry.SportsCategory, limit: int) -> tuple
                 if len(labels) != len(token_ids) or not labels:
                     continue
                 question = str(market.get("question") or market.get("groupItemTitle") or "")
-                market_type = market_type_for(category.key, labels, question)
+                market_context = " ".join(
+                    part
+                    for part in (
+                        question,
+                        str(event.get("title") or ""),
+                        str(event.get("slug") or ""),
+                        str(market.get("slug") or ""),
+                    )
+                    if part
+                )
+                market_type = market_type_for(category.key, labels, market_context)
                 rows.extend(pm_market_outcomes(category, event, market, labels, token_ids, event_date, title_matchup, market_type))
     return rows, warnings
 
@@ -530,12 +553,14 @@ def build_category_pairing(
 ) -> tuple[list[core.PairedContract], list[dict[str, Any]], list[str]]:
     pm_rows, pm_warnings = pm_candidates(category, pm_limit)
     pm_rows = filter_from_date(pm_rows, from_date)
+    pm_rows = filter_normal_sports_markets(pm_rows)
     series = category.kalshi_candidate_series
     if not series:
         row = status_row(category.key, "pm_only_inventory", "no Kalshi candidate series configured", pm_rows[0], None) if pm_rows else empty_status(category.key, "pm_only_inventory", "no Kalshi candidate series configured")
         return [], [row], pm_warnings
     ks_rows, ks_warnings = ks_candidates(category.key, series, ks_limit)
     ks_rows = filter_from_date(ks_rows, from_date)
+    ks_rows = filter_normal_sports_markets(ks_rows)
     if not ks_rows:
         rows = [status_row(category.key, "no_ks_open_markets", "configured Kalshi series have no open markets", row, None) for row in pm_rows]
         if not rows:
@@ -559,6 +584,10 @@ def filter_from_date(rows: list[CandidateOutcome], from_date: str | None) -> lis
     if not from_date:
         return rows
     return [row for row in rows if len(row.event_date) != 10 or row.event_date >= from_date]
+
+
+def filter_normal_sports_markets(rows: list[CandidateOutcome]) -> list[CandidateOutcome]:
+    return [row for row in rows if row.market_type in NORMAL_SPORTS_MARKET_TYPES]
 
 
 def f1_drivers_championship_pairing(

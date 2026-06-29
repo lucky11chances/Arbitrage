@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import market_db
 import pipeline_core as core
+import staging_edge_snapshot_builder as edge_builder
 
 
 def requested_universes(value: str) -> set[str]:
@@ -60,67 +60,156 @@ def selected_pairs(conn, universes: set[str], limit: int) -> list[Any]:
     ).fetchall()
 
 
-def collect_pair(conn, pair, ks_depth: int, sleep_seconds: float = 0.0) -> tuple[int, int]:
-    pm_observation_id = market_db.fetch_and_record_orderbook(
+def fetch_payload(fetcher) -> tuple[dict[str, Any] | None, str, int, str]:
+    started = time.monotonic()
+    try:
+        payload = fetcher()
+        collected_ts = market_db.utc_now()
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return payload, collected_ts, latency_ms, ""
+    except Exception as exc:  # noqa: BLE001 - per-instrument fetch errors are recorded in DB.
+        collected_ts = market_db.utc_now()
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return None, collected_ts, latency_ms, str(exc)
+
+
+def record_payload_or_error(
+    conn,
+    *,
+    venue: str,
+    instrument_id: str,
+    payload: dict[str, Any] | None,
+    collected_ts: str,
+    request_path: str,
+    depth: int | None,
+    latency_ms: int,
+    error_message: str,
+) -> int:
+    if payload is not None:
+        return market_db.record_orderbook_success(
+            conn,
+            venue,
+            instrument_id,
+            payload,
+            collected_ts,
+            request_path,
+            depth,
+            latency_ms,
+        )
+    observation_id = market_db.record_orderbook_error(
         conn,
-        venue="pm",
-        instrument_id=str(pair["pm_token_id"]),
-        request_path="/book",
-        depth=None,
-        fetcher=lambda: core.get_json(core.PM_CLOB, "/book", {"token_id": str(pair["pm_token_id"])}),
+        venue,
+        instrument_id,
+        collected_ts,
+        request_path,
+        depth,
+        latency_ms,
+        error_message,
+    )
+    market_db.record_warning(
+        conn,
+        "collect_paired_orderbooks",
+        f"{venue.upper()} paired orderbook fetch failed: {instrument_id}: {error_message}",
+        severity="error",
+        context={"venue": venue, "instrument_id": instrument_id},
+    )
+    return observation_id
+
+
+def collect_pair(conn, pair, ks_depth: int, sleep_seconds: float = 0.0) -> tuple[int, int]:
+    pm_token = str(pair["pm_token_id"])
+    ks_ticker = str(pair["ks_market_ticker"])
+    pm_payload, pm_collected_ts, pm_latency_ms, pm_error = fetch_payload(
+        lambda: core.get_json(core.PM_CLOB, "/book", {"token_id": pm_token})
     )
     if sleep_seconds:
         time.sleep(sleep_seconds)
-    ks_ticker = str(pair["ks_market_ticker"])
-    ks_observation_id = market_db.fetch_and_record_orderbook(
+    ks_payload, ks_collected_ts, ks_latency_ms, ks_error = fetch_payload(
+        lambda: core.get_json(core.KALSHI_API, f"/markets/{ks_ticker}/orderbook", {"depth": ks_depth})
+    )
+    pm_observation_id = record_payload_or_error(
+        conn,
+        venue="pm",
+        instrument_id=pm_token,
+        payload=pm_payload,
+        collected_ts=pm_collected_ts,
+        request_path="/book",
+        depth=None,
+        latency_ms=pm_latency_ms,
+        error_message=pm_error,
+    )
+    ks_observation_id = record_payload_or_error(
         conn,
         venue="ks",
         instrument_id=ks_ticker,
+        payload=ks_payload,
+        collected_ts=ks_collected_ts,
         request_path=f"/markets/{ks_ticker}/orderbook",
         depth=ks_depth,
-        fetcher=lambda: core.get_json(core.KALSHI_API, f"/markets/{ks_ticker}/orderbook", {"depth": ks_depth}),
+        latency_ms=ks_latency_ms,
+        error_message=ks_error,
     )
     return pm_observation_id, ks_observation_id
 
 
-def collect_pairs(conn, pairs: list[Any], ks_depth: int, sleep_seconds: float, commit_every: int) -> tuple[int, int]:
+def observation_by_id(conn, observation_id: int):
+    return conn.execute(
+        "SELECT * FROM orderbook_observations WHERE observation_id = ?",
+        (observation_id,),
+    ).fetchone()
+
+
+def collect_pairs(
+    conn,
+    pairs: list[Any],
+    ks_depth: int,
+    sleep_seconds: float,
+    commit_every: int,
+    *,
+    compute_edges: bool,
+    max_age_seconds: float,
+    max_skew_seconds: float,
+    dedupe_edges: bool,
+) -> tuple[int, int, edge_builder.InsertStats]:
     pm_count = 0
     ks_count = 0
+    edge_stats = edge_builder.InsertStats()
     for index, pair in enumerate(pairs, start=1):
-        collect_pair(conn, pair, ks_depth, sleep_seconds)
+        pm_observation_id, ks_observation_id = collect_pair(conn, pair, ks_depth, sleep_seconds)
         pm_count += 1
         ks_count += 1
+        if compute_edges:
+            edge_stats = edge_stats.plus(
+                edge_builder.insert_edge_snapshot(
+                    conn,
+                    pair,
+                    observation_by_id(conn, pm_observation_id),
+                    observation_by_id(conn, ks_observation_id),
+                    max_age_seconds=max_age_seconds,
+                    max_skew_seconds=max_skew_seconds,
+                    dedupe=dedupe_edges,
+                )
+            )
         if commit_every > 0 and index % commit_every == 0:
             conn.commit()
     conn.commit()
-    return pm_count, ks_count
+    return pm_count, ks_count, edge_stats
 
 
-def write_edges(conn, args: argparse.Namespace, pairs: list[Any]) -> tuple[int, int, list[str]]:
-    paired_contract_ids = {int(pair["paired_contract_id"]) for pair in pairs}
-    rows, warnings = market_db.compute_edge_snapshots(
+def run_once(conn, args: argparse.Namespace) -> tuple[int, int, int, edge_builder.InsertStats]:
+    pairs = selected_pairs(conn, requested_universes(args.universes), args.max_pairs)
+    pm_count, ks_count, edge_stats = collect_pairs(
         conn,
+        pairs,
+        args.ks_depth,
+        args.sleep_between_legs,
+        args.commit_every,
+        compute_edges=args.compute_edges,
         max_age_seconds=args.max_age_seconds,
         max_skew_seconds=args.max_skew_seconds,
-        ignore_age=args.ignore_age,
-        paired_contract_ids=paired_contract_ids,
+        dedupe_edges=not args.no_edge_dedupe,
     )
-    alerts = core.alert_rows(rows)
-    core.write_latest_csv(rows, core.BINARY_CSV_FIELDS, Path(args.output))
-    core.write_latest_csv(alerts, core.BINARY_CSV_FIELDS, Path(args.alert_output))
-    core.write_alert_folder(alerts, core.BINARY_CSV_FIELDS, Path(args.alert_dir))
-    return len(rows), len(alerts), warnings
-
-
-def run_once(conn, args: argparse.Namespace) -> tuple[int, int, int, int, list[str]]:
-    pairs = selected_pairs(conn, requested_universes(args.universes), args.max_pairs)
-    pm_count, ks_count = collect_pairs(conn, pairs, args.ks_depth, args.sleep_between_legs, args.commit_every)
-    edge_rows = 0
-    alert_rows = 0
-    warnings: list[str] = []
-    if args.compute_edges:
-        edge_rows, alert_rows, warnings = write_edges(conn, args, pairs)
-    return len(pairs), pm_count, ks_count, edge_rows, alert_rows, warnings
+    return len(pairs), pm_count, ks_count, edge_stats
 
 
 def main() -> None:
@@ -131,16 +220,21 @@ def main() -> None:
     parser.add_argument("--ks-depth", type=int, default=10)
     parser.add_argument("--sleep-between-legs", type=float, default=0.0)
     parser.add_argument("--commit-every", type=int, default=5)
-    parser.add_argument("--compute-edges", action="store_true")
+    parser.add_argument(
+        "--compute-edges",
+        action="store_true",
+        help="Insert edge_snapshots from the exact PM/KS observations collected for each pair.",
+    )
+    parser.add_argument("--no-edge-dedupe", action="store_true")
     parser.add_argument("--output", default="data/staging/latest_edges.csv")
     parser.add_argument("--alert-output", default="data/staging/latest_alerts.csv")
     parser.add_argument("--alert-dir", default="data/staging/alerts")
     parser.add_argument("--max-age-seconds", type=float, default=10.0)
     parser.add_argument("--max-skew-seconds", type=float, default=5.0)
-    parser.add_argument("--ignore-age", action="store_true")
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--max-iterations", type=int, default=0)
+    parser.add_argument("--busy-timeout-ms", type=int, default=60000)
     parser.add_argument("--show-warnings", action="store_true")
     args = parser.parse_args()
 
@@ -150,23 +244,25 @@ def main() -> None:
         parser.error("--ks-depth must be >= 0")
     if args.sleep_between_legs < 0 or args.interval <= 0:
         parser.error("sleep/interval values must be non-negative and interval must be positive")
+    if args.max_age_seconds <= 0 or args.max_skew_seconds <= 0:
+        parser.error("age/skew windows must be positive")
+    if args.busy_timeout_ms <= 0:
+        parser.error("--busy-timeout-ms must be positive")
 
     iteration = 1
     with market_db.connect(Path(args.db)) as conn:
         market_db.init_db(conn)
+        conn.execute(f"PRAGMA busy_timeout = {args.busy_timeout_ms}")
+        edge_builder.ensure_builder_indexes(conn)
         while True:
             started = time.monotonic()
-            selected, pm_count, ks_count, edge_count, alert_count, warnings = run_once(conn, args)
-            counts = market_db.row_counts(conn)
+            selected, pm_count, ks_count, edge_stats = run_once(conn, args)
             print(
                 "paired orderbook collect complete: "
                 f"iteration={iteration}; selected_pairs={selected}; pm_books={pm_count}; ks_books={ks_count}; "
-                f"edge_rows={edge_count}; alerts={alert_count}; observations={counts['orderbook_observations']}",
+                f"{edge_builder.format_stats(edge_stats)}",
                 flush=True,
             )
-            if args.show_warnings:
-                for warning in warnings:
-                    print(f"DB edge warning: {warning}", file=sys.stderr, flush=True)
             if not args.loop or (args.max_iterations and iteration >= args.max_iterations):
                 break
             elapsed = time.monotonic() - started

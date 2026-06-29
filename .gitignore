@@ -1,11 +1,13 @@
 __pycache__/
 *.pyc
 .DS_Store
+node_modules
 
 # Runtime data grows continuously while collectors run.
 data/history/
 data/*.log
 data/*.pid
+data/*.sqlite*
 data/alerts/
 data/sports/
 data/staging/

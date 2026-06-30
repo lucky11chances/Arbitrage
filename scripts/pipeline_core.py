@@ -35,6 +35,9 @@ BINARY_CSV_FIELDS = [
     "ks_ask",
     "ks_bid_sz",
     "ks_ask_sz",
+    "alert",
+    "alert_threshold",
+    "alert_reason",
     "net_edge",
     "best_leg",
     "gross_cost",
@@ -48,6 +51,11 @@ BINARY_CSV_FIELDS = [
     "match_format",
     "schedule_source",
 ]
+ALERT_THRESHOLD = 0.0
+ALERT_FOLDER_CSV = "latest_opportunities.csv"
+ALERT_FOLDER_SUMMARY = "latest_opportunities.txt"
+ALERT_ACTIVE_MARKER = "ALERT_ACTIVE.txt"
+ALERT_CLEAR_MARKER = "NO_CURRENT_ALERTS.txt"
 
 SOCCER_COMPAT_CSV_FIELDS = [
     "ts_utc",
@@ -180,6 +188,33 @@ def fetch_polymarket_events(
                 "/events",
                 {
                     "tag_slug": tag_slug,
+                    "closed": "false",
+                    "limit": limit,
+                    "order": "startDate",
+                    "ascending": ascending,
+                },
+            )
+            for event in events:
+                slug = str(event.get("slug") or "")
+                if slug:
+                    by_slug.setdefault(slug, event)
+    return list(by_slug.values())
+
+
+def fetch_polymarket_events_by_tag_ids(
+    tag_ids: tuple[int, ...],
+    limit: int,
+    ascending_values: tuple[str, ...] = ("true", "false"),
+) -> list[dict[str, Any]]:
+    by_slug: dict[str, dict[str, Any]] = {}
+    for tag_id in tag_ids:
+        for ascending in ascending_values:
+            events = get_json(
+                PM_GAMMA,
+                "/events",
+                {
+                    "tag_id": tag_id,
+                    "active": "true",
                     "closed": "false",
                     "limit": limit,
                     "order": "startDate",
@@ -345,6 +380,7 @@ def build_binary_rows(pairs: list[PairedContract], max_workers: int = 12) -> tup
         edge = best_net(pm_bbo.bid, pm_bbo.ask, ks_bbo.bid, ks_bbo.ask)
         bbo_size = best_leg_bbo_size(edge.leg, pm_bbo, ks_bbo)
         net_profit_at_bbo = round(edge.net_edge * bbo_size, 6) if edge.net_edge is not None and bbo_size is not None else None
+        alert = is_alert_edge(edge.net_edge)
         rows.append(
             {
                 "ts_utc": ts_utc,
@@ -364,6 +400,9 @@ def build_binary_rows(pairs: list[PairedContract], max_workers: int = 12) -> tup
                 "ks_ask": ks_bbo.ask,
                 "ks_bid_sz": ks_bbo.bid_size,
                 "ks_ask_sz": ks_bbo.ask_size,
+                "alert": "ALERT" if alert else "",
+                "alert_threshold": ALERT_THRESHOLD,
+                "alert_reason": "net_edge_positive" if alert else "",
                 "net_edge": edge.net_edge,
                 "best_leg": edge.leg,
                 "gross_cost": edge.gross_cost,
@@ -379,6 +418,58 @@ def build_binary_rows(pairs: list[PairedContract], max_workers: int = 12) -> tup
             }
         )
     return rows, warnings
+
+
+def is_alert_edge(net_edge: float | None, threshold: float = ALERT_THRESHOLD) -> bool:
+    return net_edge is not None and net_edge > threshold
+
+
+def alert_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if row.get("alert") == "ALERT"]
+
+
+def write_alert_folder(alerts: list[dict[str, Any]], fieldnames: list[str], alert_dir: Path) -> None:
+    alert_dir.mkdir(parents=True, exist_ok=True)
+    ts_utc = datetime.now(timezone.utc).isoformat()
+    write_latest_csv(alerts, fieldnames, alert_dir / ALERT_FOLDER_CSV)
+    (alert_dir / ALERT_FOLDER_SUMMARY).write_text(format_alert_summary(alerts, ts_utc), encoding="utf-8")
+
+    active_marker = alert_dir / ALERT_ACTIVE_MARKER
+    clear_marker = alert_dir / ALERT_CLEAR_MARKER
+    if alerts:
+        active_marker.write_text(format_alert_summary(alerts, ts_utc), encoding="utf-8")
+        if clear_marker.exists():
+            clear_marker.unlink()
+    else:
+        clear_marker.write_text(f"{ts_utc}\nNo current positive-edge arbitrage opportunities.\n", encoding="utf-8")
+        if active_marker.exists():
+            active_marker.unlink()
+
+
+def format_alert_summary(alerts: list[dict[str, Any]], ts_utc: str) -> str:
+    if not alerts:
+        return f"{ts_utc}\nNo current positive-edge arbitrage opportunities.\n"
+
+    lines = [
+        f"{ts_utc}",
+        f"ALERT: {len(alerts)} positive-edge arbitrage opportunities",
+        "",
+    ]
+    sorted_alerts = sorted(alerts, key=lambda row: float(row.get("net_edge") or 0), reverse=True)
+    for index, row in enumerate(sorted_alerts, start=1):
+        edge = float(row.get("net_edge") or 0)
+        lines.extend(
+            [
+                f"{index}. {row.get('universe')} | {row.get('match_name')} | {row.get('event_date')}",
+                f"   market_type={row.get('market_type')} outcome={row.get('pm_yes_outcome')} / {row.get('ks_yes_outcome')}",
+                f"   net_edge={edge:.6f} ({edge * 100:.3f}%) best_leg={row.get('best_leg')} gross_cost={row.get('gross_cost')}",
+                f"   bbo_size={row.get('best_leg_bbo_size')} net_profit_at_bbo={row.get('net_profit_at_bbo')}",
+                f"   PM event={row.get('pm_event_slug')} market={row.get('pm_market_id')} token={row.get('pm_token_id')}",
+                f"   KS event={row.get('ks_event_ticker')} market={row.get('ks_market_ticker')}",
+                "",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def fetch_bbo_map(

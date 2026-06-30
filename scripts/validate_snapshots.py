@@ -5,15 +5,28 @@ import csv
 from pathlib import Path
 from typing import Any
 
+import sports_inventory
+import sports_pairing
+import sports_registry
+import universe_adapters
+
 
 BINARY_FILES = {
     "mlb": Path("data/mlb_arb_snapshot_latest.csv"),
     "nba": Path("data/nba_arb_snapshot_latest.csv"),
+    "soccer": Path("data/worldcup_soccer_snapshot_latest.csv"),
     "cs2": Path("data/cs2_arb_snapshot_latest.csv"),
     "lol": Path("data/lol_arb_snapshot_latest.csv"),
     "valorant": Path("data/valorant_arb_snapshot_latest.csv"),
+    "formula_1": Path("data/formula_1_arb_snapshot_latest.csv"),
 }
-SOCCER_FILE = Path("data/worldcup_soccer_snapshot_latest.csv")
+INVENTORY_FILE = Path("data/polymarket_sports_inventory_latest.csv")
+PAIRING_DIAGNOSTICS_FILE = Path("data/pairing_diagnostics_latest.csv")
+ALERT_DIR = Path("data/alerts")
+SPORT_FILES = {
+    category.key: Path("data/sports") / f"{category.key}_latest.csv"
+    for category in sports_registry.inventory_categories()
+}
 BINARY_REQUIRED_FIELDS = [
     "ts_utc",
     "universe",
@@ -44,18 +57,7 @@ BINARY_REQUIRED_FIELDS = [
     "ks_market_ticker",
     "schedule_source",
 ]
-SOCCER_REQUIRED_FIELDS = [
-    "ts_utc",
-    "source",
-    "universe",
-    "event_id",
-    "title",
-    "market_count",
-    "outcomes",
-    "is_binary_candidate",
-    "skip_binary_arb",
-    "reason",
-]
+INVENTORY_REQUIRED_FIELDS = sports_inventory.INVENTORY_FIELDS
 
 
 def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
@@ -88,39 +90,165 @@ def validate_binary(universe: str, path: Path) -> dict[str, Any]:
         edge = float(row["net_edge"])
         bbo_size = float(row["best_leg_bbo_size"])
         max_edge = edge if max_edge is None else max(max_edge, edge)
+        validate_alert_fields(path, index, row, edge)
         if edge > 0.30:
             raise AssertionError(f"{path}:{index} net_edge over 30%: {edge}")
         if bbo_size < 0:
             raise AssertionError(f"{path}:{index} best_leg_bbo_size is negative: {bbo_size}")
+        if universe == "soccer":
+            validate_soccer_binary_row(path, index, row)
+        if universe == "formula_1":
+            validate_formula_1_binary_row(path, index, row)
         if universe in {"lol", "valorant"} and not row["schedule_source"].startswith("riot_"):
             raise AssertionError(f"{path}:{index} esports row lacks Riot official schedule source")
     return {"rows": len(rows), "max_edge": max_edge}
 
 
-def validate_soccer(path: Path) -> dict[str, Any]:
+def validate_soccer_binary_row(path: Path, index: int, row: dict[str, str]) -> None:
+    if row["market_type"] not in {"team_win_90min", "draw_90min"}:
+        raise AssertionError(f"{path}:{index} soccer row has unexpected market_type: {row['market_type']}")
+    if row["schedule_source"] != universe_adapters.WORLDCUP_SCHEDULE_SOURCE:
+        raise AssertionError(f"{path}:{index} soccer row lacks local World Cup schedule source")
+    if row["canonical_event_id"] not in universe_adapters.worldcup_schedule_by_id():
+        raise AssertionError(f"{path}:{index} soccer row does not map to local schedule: {row['canonical_event_id']}")
+    pm_outcome = universe_adapters.soccer_outcome_key(row["pm_yes_outcome"])
+    ks_outcome = universe_adapters.soccer_outcome_key(row["ks_yes_outcome"])
+    if pm_outcome != ks_outcome:
+        raise AssertionError(
+            f"{path}:{index} soccer PM/KS team mismatch: {row['pm_yes_outcome']} vs {row['ks_yes_outcome']}"
+        )
+    if row["market_type"] == "draw_90min" and pm_outcome != "draw":
+        raise AssertionError(f"{path}:{index} soccer draw row does not use draw outcome")
+    if row["market_type"] == "team_win_90min" and pm_outcome == "draw":
+        raise AssertionError(f"{path}:{index} soccer team-win row uses draw outcome")
+
+
+def validate_alert_fields(path: Path, index: int, row: dict[str, str], edge: float) -> None:
+    if "alert" not in row:
+        return
+    alert = row.get("alert", "")
+    if edge > 0 and alert != "ALERT":
+        raise AssertionError(f"{path}:{index} positive net_edge missing ALERT marker")
+    if edge <= 0 and alert:
+        raise AssertionError(f"{path}:{index} non-positive net_edge has alert marker: {alert}")
+
+
+def validate_formula_1_binary_row(path: Path, index: int, row: dict[str, str]) -> None:
+    if row["market_type"] != "future_winner":
+        raise AssertionError(f"{path}:{index} Formula 1 row has unexpected market_type: {row['market_type']}")
+    if not row["ks_event_ticker"].startswith("KXF1-"):
+        raise AssertionError(f"{path}:{index} Formula 1 row does not use KXF1: {row['ks_event_ticker']}")
+    if not row["canonical_event_id"].endswith(":single:formula1f1driverschampionship"):
+        raise AssertionError(f"{path}:{index} Formula 1 row is not Drivers Championship exact proposition")
+    pm_outcome = sports_pairing.outcome_key(row["pm_yes_outcome"])
+    ks_outcome = sports_pairing.outcome_key(row["ks_yes_outcome"])
+    if pm_outcome != ks_outcome:
+        raise AssertionError(
+            f"{path}:{index} Formula 1 PM/KS outcome mismatch: {row['pm_yes_outcome']} vs {row['ks_yes_outcome']}"
+        )
+
+
+def validate_pairing_diagnostics(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"rows": 0, "status": "missing"}
     fields, rows = read_csv(path)
-    require_fields(path, fields, SOCCER_REQUIRED_FIELDS)
-    if "net_edge" in fields:
-        raise AssertionError("soccer compatibility snapshot must not include net_edge")
-    skipped = 0
-    binary_candidates = 0
+    require_fields(path, fields, sports_pairing.DIAGNOSTIC_FIELDS)
+    if "net_edge" in fields or "alert" in fields:
+        raise AssertionError(f"{path} diagnostics must not include executable edge/alert fields")
+    allowed_statuses = {
+        "paired",
+        "paired_existing",
+        "no_ks_open_markets",
+        "pm_only_inventory",
+        "unmatched_semantics",
+        "ambiguous_match",
+    }
+    safe_rows = 0
     for index, row in enumerate(rows, start=2):
-        if row.get("skip_binary_arb") == "True":
-            skipped += 1
-        if row.get("is_binary_candidate") == "True":
-            binary_candidates += 1
-        if row.get("skip_binary_arb") != "True":
-            raise AssertionError(f"{path}:{index} soccer row must skip binary arb")
-        if not row.get("reason"):
-            raise AssertionError(f"{path}:{index} soccer skip row lacks reason")
-    return {"rows": len(rows), "binary_candidates": binary_candidates, "skipped": skipped}
+        if row.get("status") not in allowed_statuses:
+            raise AssertionError(f"{path}:{index} unexpected diagnostics status: {row.get('status')}")
+        if row.get("safe_paired") == "true":
+            safe_rows += 1
+            if row.get("status") not in {"paired", "paired_existing"}:
+                raise AssertionError(f"{path}:{index} unsafe status marked safe_paired=true: {row.get('status')}")
+        elif row.get("safe_paired") != "false":
+            raise AssertionError(f"{path}:{index} safe_paired must be true/false: {row.get('safe_paired')}")
+    return {"rows": len(rows), "safe_paired": safe_rows, "status": "ok"}
+
+
+def validate_inventory(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"rows": 0, "status": "missing"}
+    fields, rows = read_csv(path)
+    require_fields(path, fields, INVENTORY_REQUIRED_FIELDS)
+    categories: set[str] = set()
+    for index, row in enumerate(rows, start=2):
+        missing = [field for field in ("source", "category_key", "category_label", "tag_slug", "event_slug", "event_title") if not row.get(field)]
+        if missing:
+            raise AssertionError(f"{path}:{index} empty inventory fields: {', '.join(missing)}")
+        if row["source"] != "polymarket":
+            raise AssertionError(f"{path}:{index} unexpected source: {row['source']}")
+        if row.get("arb_enabled") == "true" and not row.get("arb_universe"):
+            raise AssertionError(f"{path}:{index} arb-enabled inventory row lacks arb_universe")
+        if row.get("market_type_guess") not in {
+            "three_way_moneyline",
+            "binary_spread",
+            "binary_total",
+            "binary_yes_no",
+            "total",
+            "two_outcome_winner",
+            "multi_outcome",
+            "unknown",
+        }:
+            raise AssertionError(f"{path}:{index} unexpected market_type_guess: {row.get('market_type_guess')}")
+        categories.add(row["category_key"])
+    return {"rows": len(rows), "categories": len(categories), "status": "ok"}
+
+
+def validate_sport_inventory(key: str, path: Path) -> dict[str, Any]:
+    fields, rows = read_csv(path)
+    require_fields(path, fields, INVENTORY_REQUIRED_FIELDS)
+    if "net_edge" in fields:
+        raise AssertionError(f"{path} sport inventory must not include net_edge")
+    for index, row in enumerate(rows, start=2):
+        if row.get("category_key") != key:
+            raise AssertionError(f"{path}:{index} category mismatch: {row.get('category_key')} != {key}")
+        missing = [field for field in ("source", "category_key", "category_label", "event_slug", "event_title") if not row.get(field)]
+        if missing:
+            raise AssertionError(f"{path}:{index} empty sport inventory fields: {', '.join(missing)}")
+    if key == "formula_1" and not rows:
+        raise AssertionError("Formula 1 inventory must have rows from Polymarket tag_id=435")
+    return {"rows": len(rows), "status": "ok"}
+
+
+def validate_alert_folder(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"status": "missing"}
+    latest_csv = path / "latest_opportunities.csv"
+    latest_summary = path / "latest_opportunities.txt"
+    if not latest_csv.exists():
+        raise AssertionError(f"missing alert folder CSV: {latest_csv}")
+    if not latest_summary.exists():
+        raise AssertionError(f"missing alert folder summary: {latest_summary}")
+    fields, rows = read_csv(latest_csv)
+    require_fields(latest_csv, fields, BINARY_REQUIRED_FIELDS)
+    summary = latest_summary.read_text(encoding="utf-8")
+    if rows and "ALERT:" not in summary:
+        raise AssertionError(f"{latest_summary} lacks ALERT summary for non-empty alert CSV")
+    if not rows and "No current positive-edge" not in summary:
+        raise AssertionError(f"{latest_summary} lacks no-alert summary for empty alert CSV")
+    return {"rows": len(rows), "status": "ok"}
 
 
 def main() -> None:
     summaries: dict[str, dict[str, Any]] = {}
     for universe, path in BINARY_FILES.items():
         summaries[universe] = validate_binary(universe, path)
-    summaries["soccer"] = validate_soccer(SOCCER_FILE)
+    summaries["inventory"] = validate_inventory(INVENTORY_FILE)
+    summaries["pairing_diagnostics"] = validate_pairing_diagnostics(PAIRING_DIAGNOSTICS_FILE)
+    for key, path in SPORT_FILES.items():
+        summaries[f"sport:{key}"] = validate_sport_inventory(key, path)
+    summaries["alert_folder"] = validate_alert_folder(ALERT_DIR)
     for universe, summary in summaries.items():
         details = ", ".join(f"{key}={value}" for key, value in summary.items())
         print(f"{universe}: ok ({details})")

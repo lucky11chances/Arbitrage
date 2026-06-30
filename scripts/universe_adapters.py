@@ -33,9 +33,13 @@ MONTHS = {
 MLB_PM_SLUG_RE = re.compile(r"^mlb-[a-z0-9]+-[a-z0-9]+-(\d{4}-\d{2}-\d{2})$")
 NBA_PM_SLUG_RE = re.compile(r"^nba-[a-z0-9]+-[a-z0-9]+-(\d{4}-\d{2}-\d{2})$")
 MLB_KS_EVENT_RE = re.compile(r"^KXMLBGAME-(\d{2})([A-Z]{3})(\d{2})\d{4}[A-Z]+$")
+WORLDCUP_KS_EVENT_RE = re.compile(r"^KXWCGAME-(\d{2})([A-Z]{3})(\d{2})[A-Z]+$")
 ESPORTS_KS_DATE_RE = re.compile(r"^KX(?:LOL|CS2|VALORANT)GAME-(\d{2})([A-Z]{3})(\d{2})\d{4}")
 SLUG_DATE_RE = re.compile(r"-(\d{4}-\d{2}-\d{2})$")
 PM_WORLDCUP_GAME_RE = re.compile(r"^fifwc-[a-z0-9]+-[a-z0-9]+-(\d{4}-\d{2}-\d{2})$")
+PM_SOCCER_TITLE_RE = re.compile(r"^(?P<team_a>.+?)\s+vs\.?\s+(?P<team_b>.+)$", re.IGNORECASE)
+PM_SOCCER_WIN_RE = re.compile(r"^Will (?P<team>.+?) win(?: on \d{4}-\d{2}-\d{2})?\??$", re.IGNORECASE)
+PM_SOCCER_DRAW_RE = re.compile(r"^Will .+? end in a draw\??$", re.IGNORECASE)
 BO_FORMAT_RE = re.compile(r"\b(BO\d+)\b", re.IGNORECASE)
 ESPORTS_TITLE_RE = re.compile(
     r"^(?P<label>Valorant|Counter-Strike|LoL|League of Legends): "
@@ -57,6 +61,105 @@ TEAM_ALIASES = {
     "shopifyrebellionblack": "shopifyrebellionblack",
     "xlggaming": "xilaigaming",
 }
+SOCCER_TEAM_ALIASES = {
+    "bosniaherzegovina": "bosniaandherzegovina",
+    "bosniaandherzegovina": "bosniaandherzegovina",
+    "bosnia": "bosniaandherzegovina",
+    "bosniaherz": "bosniaandherzegovina",
+    "caboverde": "capeverde",
+    "capeverde": "capeverde",
+    "congodr": "congodr",
+    "drcongo": "congodr",
+    "democraticrepublicofthecongo": "congodr",
+    "curacao": "curacao",
+    "cotedivoire": "ivorycoast",
+    "ivorycoast": "ivorycoast",
+    "iriran": "iriran",
+    "iran": "iriran",
+    "korearepublic": "korearepublic",
+    "southkorea": "korearepublic",
+    "republicofkorea": "korearepublic",
+    "turkiye": "turkiye",
+    "turkey": "turkiye",
+    "unitedstates": "usa",
+    "unitedstatesofamerica": "usa",
+    "usa": "usa",
+}
+WORLDCUP_SCHEDULE_SOURCE = "fifa_world_cup_2026_local_schedule"
+WORLDCUP_GROUP_STAGE_MATCHES = (
+    ("2026-06-11", "Mexico", "South Africa"),
+    ("2026-06-11", "Korea Republic", "Czechia"),
+    ("2026-06-12", "Canada", "Bosnia and Herzegovina"),
+    ("2026-06-12", "USA", "Paraguay"),
+    ("2026-06-13", "Haiti", "Scotland"),
+    ("2026-06-13", "Australia", "Turkiye"),
+    ("2026-06-13", "Brazil", "Morocco"),
+    ("2026-06-13", "Qatar", "Switzerland"),
+    ("2026-06-14", "Ivory Coast", "Ecuador"),
+    ("2026-06-14", "Germany", "Curacao"),
+    ("2026-06-14", "Netherlands", "Japan"),
+    ("2026-06-14", "Sweden", "Tunisia"),
+    ("2026-06-15", "Belgium", "Egypt"),
+    ("2026-06-15", "Spain", "Cape Verde"),
+    ("2026-06-15", "IR Iran", "New Zealand"),
+    ("2026-06-15", "Saudi Arabia", "Uruguay"),
+    ("2026-06-16", "Argentina", "Algeria"),
+    ("2026-06-16", "France", "Senegal"),
+    ("2026-06-16", "Iraq", "Norway"),
+    ("2026-06-17", "Austria", "Jordan"),
+    ("2026-06-17", "England", "Croatia"),
+    ("2026-06-17", "Ghana", "Panama"),
+    ("2026-06-17", "Portugal", "Congo DR"),
+    ("2026-06-17", "Uzbekistan", "Colombia"),
+    ("2026-06-18", "Canada", "Qatar"),
+    ("2026-06-18", "Czechia", "South Africa"),
+    ("2026-06-18", "Mexico", "Korea Republic"),
+    ("2026-06-18", "Switzerland", "Bosnia and Herzegovina"),
+    ("2026-06-19", "Brazil", "Haiti"),
+    ("2026-06-19", "Scotland", "Morocco"),
+    ("2026-06-19", "Turkiye", "Paraguay"),
+    ("2026-06-19", "USA", "Australia"),
+    ("2026-06-20", "Ecuador", "Curacao"),
+    ("2026-06-20", "Germany", "Ivory Coast"),
+    ("2026-06-20", "Netherlands", "Sweden"),
+    ("2026-06-21", "Belgium", "IR Iran"),
+    ("2026-06-21", "Spain", "Saudi Arabia"),
+    ("2026-06-21", "New Zealand", "Egypt"),
+    ("2026-06-21", "Tunisia", "Japan"),
+    ("2026-06-21", "Uruguay", "Cape Verde"),
+    ("2026-06-22", "Argentina", "Austria"),
+    ("2026-06-22", "France", "Iraq"),
+    ("2026-06-22", "Jordan", "Algeria"),
+    ("2026-06-22", "Norway", "Senegal"),
+    ("2026-06-23", "Colombia", "Congo DR"),
+    ("2026-06-23", "England", "Ghana"),
+    ("2026-06-23", "Panama", "Croatia"),
+    ("2026-06-23", "Portugal", "Uzbekistan"),
+    ("2026-06-24", "Bosnia and Herzegovina", "Qatar"),
+    ("2026-06-24", "Czechia", "Mexico"),
+    ("2026-06-24", "Morocco", "Haiti"),
+    ("2026-06-24", "South Africa", "Korea Republic"),
+    ("2026-06-24", "Scotland", "Brazil"),
+    ("2026-06-24", "Switzerland", "Canada"),
+    ("2026-06-25", "Curacao", "Ivory Coast"),
+    ("2026-06-25", "Ecuador", "Germany"),
+    ("2026-06-25", "Japan", "Sweden"),
+    ("2026-06-25", "Paraguay", "Australia"),
+    ("2026-06-25", "Tunisia", "Netherlands"),
+    ("2026-06-25", "Turkiye", "USA"),
+    ("2026-06-26", "Cape Verde", "Saudi Arabia"),
+    ("2026-06-26", "Egypt", "IR Iran"),
+    ("2026-06-26", "Norway", "France"),
+    ("2026-06-26", "New Zealand", "Belgium"),
+    ("2026-06-26", "Senegal", "Iraq"),
+    ("2026-06-26", "Uruguay", "Spain"),
+    ("2026-06-27", "Congo DR", "Uzbekistan"),
+    ("2026-06-27", "Colombia", "Portugal"),
+    ("2026-06-27", "Croatia", "Ghana"),
+    ("2026-06-27", "Algeria", "Austria"),
+    ("2026-06-27", "Jordan", "Argentina"),
+    ("2026-06-27", "Panama", "England"),
+)
 ESPORTS_CONFIG = {
     "cs2": {
         "series_ticker": "KXCS2GAME",
@@ -150,11 +253,33 @@ class OfficialEsportsMatch:
         return f"{self.teams[0].name} vs {self.teams[1].name}"
 
 
+@dataclass(frozen=True)
+class WorldCupMatch:
+    event_date: str
+    team_a: str
+    team_b: str
+
+    @property
+    def team_key(self) -> frozenset[str]:
+        return soccer_team_key(self.team_a, self.team_b)
+
+    @property
+    def match_id(self) -> str:
+        teams = sorted(self.team_key)
+        return f"worldcup_soccer:{self.event_date}:{teams[0]}:{teams[1]}"
+
+    @property
+    def matchup(self) -> str:
+        return f"{self.team_a} vs {self.team_b}"
+
+
 def pair_binary_universe(universe: str, pm_limit: int, ks_limit: int, from_date: str | None) -> tuple[list[core.PairedContract], list[str]]:
     if universe == "mlb":
         return pair_mlb(pm_limit, ks_limit, from_date)
     if universe == "nba":
         return pair_nba(pm_limit, ks_limit, from_date)
+    if universe == "soccer":
+        return pair_worldcup_soccer(pm_limit, ks_limit, from_date)
     if universe in ESPORTS_CONFIG:
         return pair_esports(universe, pm_limit, ks_limit, from_date)
     raise ValueError(f"unsupported binary universe: {universe}")
@@ -790,6 +915,270 @@ def official_team_aliases(team: OfficialEsportsTeam) -> set[str]:
             )
     aliases.update(normalize_team(variant) for variant in variants if variant)
     return aliases
+
+
+def pair_worldcup_soccer(pm_limit: int, ks_limit: int, from_date: str | None) -> tuple[list[core.PairedContract], list[str]]:
+    schedule = worldcup_schedule()
+    schedule_by_date_team_set = {(match.event_date, match.team_key): match for match in schedule}
+    pm_contracts, pm_warnings = discover_pm_worldcup_win_markets(pm_limit, from_date, schedule_by_date_team_set)
+    ks_events, ks_warnings = discover_ks_worldcup_win_events(ks_limit, from_date, schedule_by_date_team_set)
+
+    warnings = [*pm_warnings, *ks_warnings]
+    pm_index: dict[tuple[str, str], core.PMBinaryMarket] = {}
+    for pm_contract in pm_contracts:
+        match = worldcup_match_for_market(pm_contract, schedule_by_date_team_set)
+        if match is None:
+            warnings.append(f"PM World Cup market not in local schedule: {pm_contract.event_slug}")
+            continue
+        outcome_key = soccer_outcome_key(pm_contract.outcome_a)
+        pm_index[(match.match_id, outcome_key)] = pm_contract
+
+    pairs: list[core.PairedContract] = []
+    for ks_event in ks_events:
+        match = worldcup_match_for_ks_event(ks_event, schedule_by_date_team_set)
+        if match is None:
+            warnings.append(f"KS World Cup event not in local schedule: {ks_event.event_ticker}")
+            continue
+        for market in ks_event.markets:
+            outcome_key = soccer_outcome_key(market.yes_outcome)
+            pm_game = pm_index.get((match.match_id, outcome_key))
+            if pm_game is None:
+                warnings.append(f"KS World Cup matched schedule but no PM market: {ks_event.event_ticker} {market.yes_outcome}")
+                continue
+            market_type = "draw_90min" if outcome_key == "draw" else "team_win_90min"
+            pairs.append(
+                core.PairedContract(
+                    universe="soccer",
+                    category="sports",
+                    match_name=match.matchup,
+                    event_date=match.event_date,
+                    canonical_event_id=match.match_id,
+                    market_type=market_type,
+                    pm_yes_outcome=pm_game.outcome_a,
+                    pm_event_slug=pm_game.event_slug,
+                    pm_market_id=pm_game.market_id,
+                    pm_token_id=pm_game.token_a,
+                    ks_yes_outcome=market.yes_outcome,
+                    ks_event_ticker=ks_event.event_ticker,
+                    ks_market_ticker=market.ticker,
+                    schedule_source=WORLDCUP_SCHEDULE_SOURCE,
+                )
+            )
+    pairs.sort(key=lambda pair: (pair.event_date, pair.match_name, soccer_outcome_key(pair.pm_yes_outcome)))
+    return pairs, warnings
+
+
+def discover_pm_worldcup_win_markets(
+    limit: int,
+    from_date: str | None,
+    schedule_by_date_team_set: dict[tuple[str, frozenset[str]], WorldCupMatch],
+) -> tuple[list[core.PMBinaryMarket], list[str]]:
+    contracts: list[core.PMBinaryMarket] = []
+    warnings: list[str] = []
+    for event in core.fetch_polymarket_events(("soccer",), limit):
+        slug = str(event.get("slug") or "")
+        match = PM_WORLDCUP_GAME_RE.match(slug)
+        if not match:
+            continue
+        event_date = match.group(1)
+        if from_date and event_date < from_date:
+            continue
+        title = str(event.get("title") or "")
+        title_teams = parse_soccer_title_teams(title)
+        if title_teams is None:
+            warnings.append(f"PM World Cup title not parseable: {slug}")
+            continue
+        official = schedule_by_date_team_set.get((event_date, soccer_team_key(*title_teams)))
+        if official is None:
+            warnings.append(f"PM World Cup event not in local schedule: {slug}")
+            continue
+        for market in active_pm_markets(event):
+            parsed = pm_worldcup_win_market_from_market(event, market, event_date, official)
+            if parsed is not None:
+                contracts.append(parsed)
+    contracts.sort(key=lambda contract: (contract.event_date, contract.event_slug, soccer_outcome_key(contract.outcome_a)))
+    return contracts, warnings
+
+
+def pm_worldcup_win_market_from_market(
+    event: dict[str, Any],
+    market: dict[str, Any],
+    event_date: str,
+    official: WorldCupMatch,
+) -> core.PMBinaryMarket | None:
+    question = str(market.get("question") or market.get("groupItemTitle") or "")
+    outcome = extract_pm_soccer_outcome(question)
+    if outcome is None:
+        return None
+    outcome_key = soccer_outcome_key(outcome)
+    if outcome_key != "draw" and outcome_key not in official.team_key:
+        return None
+    outcomes = core.parse_json_list(market.get("outcomes"))
+    token_ids = core.parse_json_list(market.get("clobTokenIds"))
+    if len(outcomes) != 2 or len(token_ids) != 2:
+        return None
+    if [str(outcome).lower() for outcome in outcomes] != ["yes", "no"]:
+        return None
+    return core.PMBinaryMarket(
+        event_date=event_date,
+        event_slug=str(event.get("slug") or ""),
+        event_title=str(event.get("title") or ""),
+        market_id=str(market.get("id") or ""),
+        market_question=str(market.get("question") or ""),
+        outcome_a=outcome,
+        outcome_b=f"Not {outcome}",
+        token_a=str(token_ids[0]),
+        token_b=str(token_ids[1]),
+    )
+
+
+def discover_ks_worldcup_win_events(
+    limit: int,
+    from_date: str | None,
+    schedule_by_date_team_set: dict[tuple[str, frozenset[str]], WorldCupMatch],
+) -> tuple[list[core.KSEvent], list[str]]:
+    by_event: dict[str, list[core.KSMarket]] = defaultdict(list)
+    titles: dict[str, str] = {}
+    warnings: list[str] = []
+    raw_markets = core.get_json(
+        core.KALSHI_API,
+        "/markets",
+        {"series_ticker": "KXWCGAME", "status": "open", "limit": min(max(limit, 1), 200)},
+    ).get("markets", [])
+    for raw_market in raw_markets:
+        event_ticker = str(raw_market.get("event_ticker") or "")
+        ticker = str(raw_market.get("ticker") or "")
+        yes_outcome = str(raw_market.get("yes_sub_title") or "")
+        if not event_ticker or not ticker or not yes_outcome:
+            continue
+        by_event[event_ticker].append(
+            core.KSMarket(
+                ticker=ticker,
+                yes_outcome=yes_outcome,
+                yes_bid=raw_market.get("yes_bid_dollars"),
+                yes_ask=raw_market.get("yes_ask_dollars"),
+                close_time=str(raw_market.get("close_time") or ""),
+            )
+        )
+        titles[event_ticker] = clean_ks_title(str(raw_market.get("title") or ""))
+
+    events: list[core.KSEvent] = []
+    for event_ticker, markets in by_event.items():
+        event_date = parse_worldcup_ks_date(event_ticker)
+        if event_date is None:
+            warnings.append(f"KS World Cup date not parseable: {event_ticker}")
+            continue
+        if from_date and event_date < from_date:
+            continue
+        outcome_markets = [market for market in markets if market.yes_outcome]
+        non_draw_markets = [market for market in outcome_markets if not is_draw_or_tie(market.yes_outcome)]
+        draw_markets = [market for market in outcome_markets if is_draw_or_tie(market.yes_outcome)]
+        if len(outcome_markets) != 3 or len(non_draw_markets) != 2 or len(draw_markets) != 1:
+            warnings.append(f"KS World Cup event does not have exactly three outcome markets: {event_ticker}")
+            continue
+        title = titles.get(event_ticker, "")
+        title_teams = parse_soccer_title_teams(title)
+        if title_teams is None:
+            title_teams = first_two_non_draw_outcomes(outcome_markets)
+            if title_teams is None:
+                warnings.append(f"KS World Cup teams not parseable: {event_ticker}")
+                continue
+        official = schedule_by_date_team_set.get((event_date, soccer_team_key(*title_teams)))
+        if official is None:
+            warnings.append(f"KS World Cup event not in local schedule: {event_ticker}")
+            continue
+        events.append(
+            core.KSEvent(
+                universe="soccer",
+                event_ticker=event_ticker,
+                title=title,
+                event_date=event_date,
+                team_a=official.team_a,
+                team_b=official.team_b,
+                match_format="",
+                markets=outcome_markets,
+            )
+        )
+    events.sort(key=lambda event: (event.event_date, event.title))
+    return events, warnings
+
+
+def worldcup_schedule() -> list[WorldCupMatch]:
+    return [WorldCupMatch(event_date, team_a, team_b) for event_date, team_a, team_b in WORLDCUP_GROUP_STAGE_MATCHES]
+
+
+def worldcup_schedule_by_id() -> dict[str, WorldCupMatch]:
+    return {match.match_id: match for match in worldcup_schedule()}
+
+
+def worldcup_match_for_market(
+    market: core.PMBinaryMarket,
+    schedule_by_date_team_set: dict[tuple[str, frozenset[str]], WorldCupMatch],
+) -> WorldCupMatch | None:
+    title_teams = parse_soccer_title_teams(market.event_title)
+    if title_teams is None:
+        return None
+    return schedule_by_date_team_set.get((market.event_date, soccer_team_key(*title_teams)))
+
+
+def worldcup_match_for_ks_event(
+    event: core.KSEvent,
+    schedule_by_date_team_set: dict[tuple[str, frozenset[str]], WorldCupMatch],
+) -> WorldCupMatch | None:
+    return schedule_by_date_team_set.get((event.event_date, soccer_team_key(event.team_a, event.team_b)))
+
+
+def parse_soccer_title_teams(title: str) -> tuple[str, str] | None:
+    match = PM_SOCCER_TITLE_RE.match(title.strip())
+    if not match:
+        return None
+    return match.group("team_a").strip(), match.group("team_b").strip()
+
+
+def extract_pm_soccer_win_team(question: str) -> str | None:
+    match = PM_SOCCER_WIN_RE.match(question.strip())
+    if not match:
+        return None
+    return match.group("team").strip()
+
+
+def extract_pm_soccer_outcome(question: str) -> str | None:
+    if PM_SOCCER_DRAW_RE.match(question.strip()):
+        return "Draw"
+    return extract_pm_soccer_win_team(question)
+
+
+def parse_worldcup_ks_date(event_ticker: str) -> str | None:
+    match = WORLDCUP_KS_EVENT_RE.match(event_ticker)
+    if not match:
+        return None
+    return date_from_yy_mon_day(match.group(1), match.group(2), match.group(3))
+
+
+def normalize_soccer_team(name: str) -> str:
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    compact = re.sub(r"[^a-z0-9]+", "", folded.lower().replace("&", " and "))
+    return SOCCER_TEAM_ALIASES.get(compact, compact)
+
+
+def soccer_outcome_key(outcome: str) -> str:
+    return "draw" if is_draw_or_tie(outcome) else normalize_soccer_team(outcome)
+
+
+def first_two_non_draw_outcomes(markets: list[core.KSMarket]) -> tuple[str, str] | None:
+    outcomes = [market.yes_outcome for market in markets if not is_draw_or_tie(market.yes_outcome)]
+    if len(outcomes) != 2:
+        return None
+    return outcomes[0], outcomes[1]
+
+
+def soccer_team_key(team_a: str, team_b: str) -> frozenset[str]:
+    return frozenset({normalize_soccer_team(team_a), normalize_soccer_team(team_b)})
+
+
+def is_draw_or_tie(value: str) -> bool:
+    lowered = value.strip().lower()
+    return lowered in {"tie", "draw"} or " tie" in lowered or " draw" in lowered or "end in a draw" in lowered
 
 
 def build_worldcup_soccer_rows(pm_limit: int, ks_limit: int) -> list[dict[str, Any]]:

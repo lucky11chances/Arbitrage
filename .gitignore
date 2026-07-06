@@ -8,8 +8,20 @@ data/history/
 data/*.log
 data/*.pid
 data/*.sqlite*
+data/**/*.log
+data/**/*.pid
+data/**/*.sqlite*
 data/alerts/
 data/sports/
-data/staging/
+data/old/
+data/new/
+data/index/
 data/arb_alerts_latest.csv
-data/polymarket_sports_inventory_latest.csv
+data/polymarket_old_sports_inventory_latest.csv
+
+# Local credentials and generated reports/previews.
+KS_api_key_test.txt
+*api_key*
+*key_id*
+output/pdf/
+tmp/pdfs/

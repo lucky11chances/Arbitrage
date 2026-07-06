@@ -224,7 +224,7 @@ Current handling:
 - LoL: binary esports snapshot at `data/lol_arb_snapshot_latest.csv`; pairs only when PM and Kalshi both match a concrete Riot LoL Esports official schedule match.
 - Valorant: binary esports snapshot at `data/valorant_arb_snapshot_latest.csv`; pairs only when PM and Kalshi both match a concrete Riot Valorant Esports official schedule match.
 - World Cup / soccer: binary outcome snapshot. The adapter pairs PM/Kalshi Team A win, Draw/Tie, and Team B win contracts through a local FIFA World Cup 2026 group-stage schedule.
-- Polymarket Sports inventory: all listed sports categories are tracked at `data/polymarket_sports_inventory_latest.csv`; only registry entries with `arb_enabled=true` flow into binary arb rows.
+- Polymarket Sports inventory: all listed sports categories are tracked at `data/polymarket_old_sports_inventory_latest.csv`; only registry entries with `arb_enabled=true` flow into binary arb rows.
 - Per-sport inventory: every adapter writes `data/sports/<sport>_latest.csv`.
 - Formula 1 is keyed by Polymarket `/sports` metadata (`sport=f1`, `tag_id=435`, `series=11635`) rather than a guessed `formula-1` tag slug.
 
@@ -257,10 +257,10 @@ The standalone discovery/pair/build scripts have been consolidated into the unif
 - `scripts/build_all_snapshots.py`
 - `scripts/run_snapshot_loop.py`
 - `scripts/run_sport_snapshot.py`
-- `scripts/sports_adapters/`
-- `scripts/pipeline_core.py`
-- `scripts/universe_adapters.py`
-- `scripts/nba_common.py`
+- `scripts/old_sports_adapters/`
+- `scripts/old_pipeline_core.py`
+- `scripts/old_universe_adapters.py`
+- `scripts/old_nba_common.py`
 
 ## Week 1-2 Exit Criteria
 

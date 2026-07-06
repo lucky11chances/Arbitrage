@@ -14,21 +14,21 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import market_db  # noqa: E402
-import pipeline_core as core  # noqa: E402
-import sports_taxonomy  # noqa: E402
-import staging_collect_market_db  # noqa: E402
-import staging_pair_from_db  # noqa: E402
-import staging_normalize_market_db  # noqa: E402
-import validate_market_db  # noqa: E402
+import old_market_db  # noqa: E402
+import old_pipeline_core as core  # noqa: E402
+import old_sports_taxonomy  # noqa: E402
+import old_staging_collect_market_db  # noqa: E402
+import old_staging_pair_from_db  # noqa: E402
+import old_staging_normalize_market_db  # noqa: E402
+import old_validate_market_db  # noqa: E402
 
 
 class MarketDbTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "test.sqlite"
-        self.conn = market_db.connect(self.db_path)
-        market_db.init_db(self.conn)
+        self.conn = old_market_db.connect(self.db_path)
+        old_market_db.init_db(self.conn)
 
     def tearDown(self) -> None:
         self.conn.close()
@@ -57,8 +57,8 @@ class MarketDbTests(unittest.TestCase):
             "closed": False,
             "enableOrderBook": True,
             "description": market_description,
-            "outcomes": market_db.json_text(outcomes),
-            "clobTokenIds": market_db.json_text(token_ids),
+            "outcomes": old_market_db.json_text(outcomes),
+            "clobTokenIds": old_market_db.json_text(token_ids),
         }
         if market_extra:
             market_payload.update(market_extra)
@@ -75,7 +75,7 @@ class MarketDbTests(unittest.TestCase):
         }
         if event_extra:
             event_payload.update(event_extra)
-        market_db.upsert_pm_event(
+        old_market_db.upsert_pm_event(
             self.conn,
             event_payload,
             tag_slug=tag_slug,
@@ -91,7 +91,7 @@ class MarketDbTests(unittest.TestCase):
         suffixes: list[str],
     ) -> None:
         for outcome, suffix in zip(outcomes, suffixes):
-            market_db.upsert_ks_market(
+            old_market_db.upsert_ks_market(
                 self.conn,
                 series_ticker,
                 {
@@ -105,7 +105,7 @@ class MarketDbTests(unittest.TestCase):
             )
 
     def test_pm_orderbook_best_bid_ask(self) -> None:
-        parsed = market_db.parse_pm_orderbook(
+        parsed = old_market_db.parse_pm_orderbook(
             {
                 "timestamp": "1780000000",
                 "bids": [{"price": "0.45", "size": "100"}, {"price": "0.47", "size": "20"}],
@@ -113,13 +113,13 @@ class MarketDbTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(parsed.best_bid, market_db.Decimal("0.47"))
-        self.assertEqual(parsed.best_bid_size, market_db.Decimal("20"))
-        self.assertEqual(parsed.best_ask, market_db.Decimal("0.49"))
-        self.assertEqual(parsed.best_ask_size, market_db.Decimal("5"))
+        self.assertEqual(parsed.best_bid, old_market_db.Decimal("0.47"))
+        self.assertEqual(parsed.best_bid_size, old_market_db.Decimal("20"))
+        self.assertEqual(parsed.best_ask, old_market_db.Decimal("0.49"))
+        self.assertEqual(parsed.best_ask_size, old_market_db.Decimal("5"))
 
     def test_ks_orderbook_yes_bid_and_implied_ask(self) -> None:
-        parsed = market_db.parse_ks_orderbook(
+        parsed = old_market_db.parse_ks_orderbook(
             {
                 "orderbook_fp": {
                     "yes_dollars": [["0.4100", "10.00"], ["0.4200", "13.00"]],
@@ -128,10 +128,10 @@ class MarketDbTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(parsed.best_bid, market_db.Decimal("0.4200"))
-        self.assertEqual(parsed.best_bid_size, market_db.Decimal("13.00"))
-        self.assertEqual(parsed.best_ask, market_db.Decimal("0.4400"))
-        self.assertEqual(parsed.best_ask_size, market_db.Decimal("17.00"))
+        self.assertEqual(parsed.best_bid, old_market_db.Decimal("0.4200"))
+        self.assertEqual(parsed.best_bid_size, old_market_db.Decimal("13.00"))
+        self.assertEqual(parsed.best_ask, old_market_db.Decimal("0.4400"))
+        self.assertEqual(parsed.best_ask_size, old_market_db.Decimal("17.00"))
 
     def test_metadata_upsert_and_payload_deduplication(self) -> None:
         event = {
@@ -152,18 +152,18 @@ class MarketDbTests(unittest.TestCase):
                 }
             ],
         }
-        market_db.upsert_pm_event(self.conn, event, tag_slug="mlb")
+        old_market_db.upsert_pm_event(self.conn, event, tag_slug="mlb")
         payload = {
             "timestamp": "1780000000",
             "bids": [{"price": "0.45", "size": "100"}],
             "asks": [{"price": "0.46", "size": "50"}],
         }
         ts = datetime.now(timezone.utc).isoformat()
-        market_db.record_orderbook_success(self.conn, "pm", "token-a", payload, ts, "/book", None, 10)
-        market_db.record_orderbook_success(self.conn, "pm", "token-a", payload, ts, "/book", None, 10)
+        old_market_db.record_orderbook_success(self.conn, "pm", "token-a", payload, ts, "/book", None, 10)
+        old_market_db.record_orderbook_success(self.conn, "pm", "token-a", payload, ts, "/book", None, 10)
         self.conn.commit()
 
-        counts = market_db.row_counts(self.conn)
+        counts = old_market_db.row_counts(self.conn)
         self.assertEqual(counts["pm_events"], 1)
         self.assertEqual(counts["pm_event_sources"], 1)
         self.assertEqual(counts["pm_markets"], 1)
@@ -171,11 +171,82 @@ class MarketDbTests(unittest.TestCase):
         self.assertEqual(counts["orderbook_payloads"], 1)
         self.assertEqual(counts["orderbook_observations"], 2)
         self.assertEqual(counts["orderbook_levels"], 4)
-        validate_market_db.validate_integrity(self.conn)
-        self.assertEqual(validate_market_db.validate_raw_json(self.conn), 3)
+        old_validate_market_db.validate_integrity(self.conn)
+        self.assertEqual(old_validate_market_db.validate_raw_json(self.conn), 3)
+
+    def test_pm_upsert_keeps_only_binary_winner_markets(self) -> None:
+        event = {
+            "id": "event-1",
+            "slug": "mlb-alpha-beta-2026-06-24",
+            "title": "Alpha Bears vs. Beta Cats",
+            "active": True,
+            "closed": False,
+            "markets": [
+                {
+                    "id": "market-winner",
+                    "question": "Alpha Bears vs. Beta Cats winner",
+                    "active": True,
+                    "closed": False,
+                    "enableOrderBook": True,
+                    "outcomes": '["Alpha Bears","Beta Cats"]',
+                    "clobTokenIds": '["token-alpha","token-beta"]',
+                },
+                {
+                    "id": "market-spread",
+                    "question": "Alpha Bears -1.5 spread",
+                    "active": True,
+                    "closed": False,
+                    "enableOrderBook": True,
+                    "outcomes": '["Alpha Bears","Beta Cats"]',
+                    "clobTokenIds": '["token-spread-a","token-spread-b"]',
+                },
+                {
+                    "id": "market-prop",
+                    "question": "Will Alpha Bears score over 4.5 runs?",
+                    "active": True,
+                    "closed": False,
+                    "enableOrderBook": True,
+                    "outcomes": '["Yes","No"]',
+                    "clobTokenIds": '["token-yes","token-no"]',
+                },
+            ],
+        }
+
+        old_market_db.upsert_pm_event(self.conn, event, tag_slug="baseball")
+        old_market_db.upsert_pm_event(
+            self.conn,
+            {
+                "id": "event-future",
+                "slug": "world-cup-championship-winner",
+                "title": "World Cup championship winner",
+                "active": True,
+                "closed": False,
+                "markets": [
+                    {
+                        "id": "market-future",
+                        "question": "World Cup championship winner",
+                        "active": True,
+                        "closed": False,
+                        "enableOrderBook": True,
+                        "outcomes": '["Brazil","France"]',
+                        "clobTokenIds": '["token-brazil","token-france"]',
+                    }
+                ],
+            },
+            tag_slug="world-cup",
+        )
+        self.conn.commit()
+
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM pm_events").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM pm_markets").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM pm_tokens").fetchone()[0], 2)
+        self.assertEqual(
+            self.conn.execute("SELECT market_id FROM pm_markets").fetchone()[0],
+            "market-winner",
+        )
 
     def test_gender_aware_taxonomy(self) -> None:
-        pm_wnba = sports_taxonomy.classify_pm_event(
+        pm_wnba = old_sports_taxonomy.classify_pm_event(
             "wnba-atl-gsv-2026-06-24",
             "Atlanta Dream vs. Golden State Valkyries",
             ["tag_slug:basketball", "tag_slug:wnba"],
@@ -184,7 +255,7 @@ class MarketDbTests(unittest.TestCase):
         self.assertEqual(pm_wnba.universe, "wnba")
         self.assertEqual(pm_wnba.competition_gender, "women")
 
-        pm_nba = sports_taxonomy.classify_pm_event(
+        pm_nba = old_sports_taxonomy.classify_pm_event(
             "nba-bos-nyk-2026-06-24",
             "Boston Celtics vs. New York Knicks",
             ["tag_slug:nba"],
@@ -194,23 +265,23 @@ class MarketDbTests(unittest.TestCase):
         self.assertEqual(pm_nba.competition_gender, "men")
 
         self.assertEqual(
-            sports_taxonomy.classify_ks_market("KXWNBAGAME", "KXWNBAGAME-26JUN24NYSEA-NY", "New York vs Seattle winner?").competition_gender,
+            old_sports_taxonomy.classify_ks_market("KXWNBAGAME", "KXWNBAGAME-26JUN24NYSEA-NY", "New York vs Seattle winner?").competition_gender,
             "women",
         )
         self.assertEqual(
-            sports_taxonomy.classify_ks_market("KXNBAGAME", "KXNBAGAME-26JUN24NYBOS-NY", "New York vs Boston winner?").competition_gender,
+            old_sports_taxonomy.classify_ks_market("KXNBAGAME", "KXNBAGAME-26JUN24NYBOS-NY", "New York vs Boston winner?").competition_gender,
             "men",
         )
         self.assertEqual(
-            sports_taxonomy.classify_ks_market("KXWTAMATCH", "KXWTAMATCH-26JUN24AAABBB-AAA", "A vs B match").competition_gender,
+            old_sports_taxonomy.classify_ks_market("KXWTAMATCH", "KXWTAMATCH-26JUN24AAABBB-AAA", "A vs B match").competition_gender,
             "women",
         )
         self.assertEqual(
-            sports_taxonomy.classify_ks_market("KXITFMATCH", "KXITFMATCH-26JUN24AAABBB-AAA", "M15 Round of 32 match").competition_gender,
+            old_sports_taxonomy.classify_ks_market("KXITFMATCH", "KXITFMATCH-26JUN24AAABBB-AAA", "M15 Round of 32 match").competition_gender,
             "men",
         )
 
-        conflict = sports_taxonomy.classify_ks_market(
+        conflict = old_sports_taxonomy.classify_ks_market(
             "KXNBAGAME",
             "KXNBAGAME-26JUN24AAABBB-AAA",
             "Will AAA win the Women's basketball game?",
@@ -220,12 +291,12 @@ class MarketDbTests(unittest.TestCase):
 
     def test_wnba_entity_key_maps_city_to_team(self) -> None:
         self.assertEqual(
-            sports_taxonomy.entity_key("basketball", "wnba", "women", "New York Liberty"),
-            sports_taxonomy.entity_key("basketball", "wnba", "women", "New York"),
+            old_sports_taxonomy.entity_key("basketball", "wnba", "women", "New York Liberty"),
+            old_sports_taxonomy.entity_key("basketball", "wnba", "women", "New York"),
         )
         self.assertNotEqual(
-            sports_taxonomy.entity_key("basketball", "wnba", "women", "New York"),
-            sports_taxonomy.entity_key("basketball", "nba", "men", "New York"),
+            old_sports_taxonomy.entity_key("basketball", "wnba", "women", "New York"),
+            old_sports_taxonomy.entity_key("basketball", "nba", "men", "New York"),
         )
 
     def test_pm_orderbook_candidates_rotate_across_tags(self) -> None:
@@ -233,7 +304,7 @@ class MarketDbTests(unittest.TestCase):
             ("mlb-aaa-bbb-2026-06-24", "baseball", ["token-a", "token-b"]),
             ("soccer-ccc-ddd-2026-06-24", "soccer", ["token-c", "token-d"]),
         ):
-            market_db.upsert_pm_event(
+            old_market_db.upsert_pm_event(
                 self.conn,
                 {
                     "id": slug,
@@ -257,16 +328,17 @@ class MarketDbTests(unittest.TestCase):
             )
         self.conn.commit()
 
-        self.assertEqual(market_db.active_pm_token_ids(self.conn, limit=2), ["token-a", "token-c"])
+        self.assertEqual(old_market_db.active_pm_token_ids(self.conn, limit=2), ["token-a", "token-c"])
 
     def test_active_ks_markets_are_orderbook_candidates(self) -> None:
         markets = [
             ("KXMLBGAME", "KXMLBGAME-26JUN241900AAABBB-AAA"),
             ("KXMLBGAME", "KXMLBGAME-26JUN241900AAABBB-BBB"),
             ("KXNFLGAME", "KXNFLGAME-26SEP101900CCCDDD-CCC"),
+            ("KXNFLGAME", "KXNFLGAME-26SEP101900CCCDDD-DDD"),
         ]
         for series_ticker, ticker in markets:
-            market_db.upsert_ks_market(
+            old_market_db.upsert_ks_market(
                 self.conn,
                 series_ticker,
                 {
@@ -280,13 +352,160 @@ class MarketDbTests(unittest.TestCase):
         self.conn.commit()
 
         self.assertEqual(
-            market_db.active_ks_market_tickers(self.conn, limit=2),
+            old_market_db.active_ks_market_tickers(self.conn, limit=2),
             ["KXMLBGAME-26JUN241900AAABBB-AAA", "KXNFLGAME-26SEP101900CCCDDD-CCC"],
         )
         self.assertEqual(
-            market_db.ks_markets_for_series(self.conn, "KXMLBGAME", 10)[0]["ticker"],
+            old_market_db.ks_markets_for_series(self.conn, "KXMLBGAME", 10)[0]["ticker"],
             "KXMLBGAME-26JUN241900AAABBB-AAA",
         )
+
+    def test_active_selection_excludes_preexisting_non_binary_rows(self) -> None:
+        self.add_pm_binary_event(
+            slug="mlb-alpha-beta-2026-06-24",
+            title="Alpha Bears vs. Beta Cats",
+            tag_slug="baseball",
+            outcomes=["Alpha Bears", "Beta Cats"],
+            token_ids=["pm-alpha", "pm-beta"],
+        )
+        now = old_market_db.utc_now()
+        bad_market = {
+            "id": "market-bad-prop",
+            "question": "Will Alpha Bears score over 4.5 runs?",
+            "active": True,
+            "closed": False,
+            "enableOrderBook": True,
+            "outcomes": '["Yes","No"]',
+            "clobTokenIds": '["pm-bad-yes","pm-bad-no"]',
+        }
+        self.conn.execute(
+            """
+            INSERT INTO pm_events (
+                event_slug, event_id, title, start_date, end_date, active, closed,
+                tag_slug, tag_id, raw_json, first_seen_ts, last_seen_ts
+            ) VALUES ('pm-bad-event', 'pm-bad-event', 'Alpha prop', '', '', 1, 0,
+                'baseball', '', '{}', ?, ?)
+            """,
+            (now, now),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO pm_markets (
+                market_id, event_slug, question, market_slug, condition_id, active,
+                closed, enable_order_book, outcomes_json, clob_token_ids_json,
+                raw_json, first_seen_ts, last_seen_ts
+            ) VALUES ('market-bad-prop', 'pm-bad-event', ?, '', '', 1, 0, 1,
+                ?, ?, ?, ?, ?)
+            """,
+            (
+                bad_market["question"],
+                bad_market["outcomes"],
+                bad_market["clobTokenIds"],
+                old_market_db.json_text(bad_market),
+                now,
+                now,
+            ),
+        )
+        for index, token_id in enumerate(("pm-bad-yes", "pm-bad-no")):
+            self.conn.execute(
+                """
+                INSERT INTO pm_tokens (
+                    token_id, market_id, event_slug, outcome_index, outcome_name,
+                    active, closed, first_seen_ts, last_seen_ts
+                ) VALUES (?, 'market-bad-prop', 'pm-bad-event', ?, ?, 1, 0, ?, ?)
+                """,
+                (token_id, index, ("Yes", "No")[index], now, now),
+            )
+
+        self.add_ks_binary_event(
+            series_ticker="KXMLBGAME",
+            event_ticker="KXMLBGAME-26JUN24ALPBET",
+            title="Alpha Bears vs Beta Cats winner",
+            outcomes=["Alpha Bears", "Beta Cats"],
+            suffixes=["ALP", "BET"],
+        )
+        self.add_ks_binary_event(
+            series_ticker="KXMLBGAME",
+            event_ticker="KXMLBGAME-26JUN24DRAW",
+            title="Alpha Bears vs Beta Cats draw",
+            outcomes=["Alpha Bears", "Beta Cats", "Draw"],
+            suffixes=["ALP", "BET", "DRAW"],
+        )
+        self.add_ks_binary_event(
+            series_ticker="KXMLBGAME",
+            event_ticker="KXMLBGAME-CHAMP",
+            title="League championship winner",
+            outcomes=["Alpha Bears", "Beta Cats"],
+            suffixes=["ALP", "BET"],
+        )
+        self.conn.commit()
+
+        self.assertEqual(old_market_db.active_pm_token_ids(self.conn), ["pm-alpha", "pm-beta"])
+        self.assertEqual(
+            old_market_db.active_ks_market_tickers(self.conn),
+            ["KXMLBGAME-26JUN24ALPBET-ALP", "KXMLBGAME-26JUN24ALPBET-BET"],
+        )
+
+    def test_collect_ks_metadata_writes_only_binary_winner_groups(self) -> None:
+        original_candidate = old_staging_collect_market_db.candidate_ks_series
+        original_fetch = old_staging_collect_market_db.fetch_ks_markets
+
+        def fake_candidate_ks_series(_adapters):
+            return ["KXMLBGAME"]
+
+        def fake_fetch_ks_markets(_series_ticker, _page_limit, _max_pages):
+            return [
+                {
+                    "ticker": "KXMLBGAME-ALPBET-ALP",
+                    "event_ticker": "KXMLBGAME-ALPBET",
+                    "title": "Alpha Bears vs Beta Cats winner",
+                    "yes_sub_title": "Alpha Bears",
+                    "status": "open",
+                },
+                {
+                    "ticker": "KXMLBGAME-ALPBET-BET",
+                    "event_ticker": "KXMLBGAME-ALPBET",
+                    "title": "Alpha Bears vs Beta Cats winner",
+                    "yes_sub_title": "Beta Cats",
+                    "status": "open",
+                },
+                {
+                    "ticker": "KXMLBGAME-DRAW-ALP",
+                    "event_ticker": "KXMLBGAME-DRAW",
+                    "title": "Alpha Bears vs Beta Cats draw",
+                    "yes_sub_title": "Alpha Bears",
+                    "status": "open",
+                },
+                {
+                    "ticker": "KXMLBGAME-DRAW-BET",
+                    "event_ticker": "KXMLBGAME-DRAW",
+                    "title": "Alpha Bears vs Beta Cats draw",
+                    "yes_sub_title": "Beta Cats",
+                    "status": "open",
+                },
+                {
+                    "ticker": "KXMLBGAME-DRAW-DRAW",
+                    "event_ticker": "KXMLBGAME-DRAW",
+                    "title": "Alpha Bears vs Beta Cats draw",
+                    "yes_sub_title": "Draw",
+                    "status": "open",
+                },
+            ]
+
+        old_staging_collect_market_db.candidate_ks_series = fake_candidate_ks_series
+        old_staging_collect_market_db.fetch_ks_markets = fake_fetch_ks_markets
+        try:
+            count = old_staging_collect_market_db.collect_ks_metadata(
+                self.conn,
+                [],
+                SimpleNamespace(ks_page_limit=100, max_ks_pages=1, show_warnings=False),
+            )
+        finally:
+            old_staging_collect_market_db.candidate_ks_series = original_candidate
+            old_staging_collect_market_db.fetch_ks_markets = original_fetch
+
+        self.assertEqual(count, 2)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM ks_markets").fetchone()[0], 2)
 
     def test_normalizer_is_gender_aware_and_inventory_only(self) -> None:
         wnba_event = {
@@ -327,10 +546,10 @@ class MarketDbTests(unittest.TestCase):
                 }
             ],
         }
-        market_db.upsert_pm_event(self.conn, wnba_event, tag_slug="basketball")
-        market_db.upsert_pm_event(self.conn, wnba_event, tag_slug="wnba")
-        market_db.upsert_pm_event(self.conn, nba_event, tag_slug="nba")
-        market_db.upsert_ks_market(
+        old_market_db.upsert_pm_event(self.conn, wnba_event, tag_slug="basketball")
+        old_market_db.upsert_pm_event(self.conn, wnba_event, tag_slug="wnba")
+        old_market_db.upsert_pm_event(self.conn, nba_event, tag_slug="nba")
+        old_market_db.upsert_ks_market(
             self.conn,
             "KXWNBAGAME",
             {
@@ -343,8 +562,8 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        first = staging_normalize_market_db.normalize_db(self.conn)
-        second = staging_normalize_market_db.normalize_db(self.conn)
+        first = old_staging_normalize_market_db.normalize_db(self.conn)
+        second = old_staging_normalize_market_db.normalize_db(self.conn)
         self.assertEqual(first, second)
 
         rows = self.conn.execute(
@@ -361,7 +580,7 @@ class MarketDbTests(unittest.TestCase):
         self.assertTrue(all(row["safe_pair_candidate"] == 0 for row in rows))
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM paired_contracts").fetchone()[0], 0)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM edge_snapshots").fetchone()[0], 0)
-        validate_market_db.validate_normalized_contracts(self.conn)
+        old_validate_market_db.validate_normalized_contracts(self.conn)
 
     def test_db_only_pairer_rejects_unknown_gender(self) -> None:
         self.add_pm_binary_event(
@@ -380,7 +599,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="basketball",
             from_date="2026-06-24",
@@ -389,6 +608,91 @@ class MarketDbTests(unittest.TestCase):
         self.assertEqual(pairs, [])
         self.assertEqual(counts["safe_pairs"], 0)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM paired_contracts").fetchone()[0], 0)
+
+    def test_incremental_pair_refresh_does_not_delete_edge_history(self) -> None:
+        now = "2026-06-29T00:00:00+00:00"
+        cursor = self.conn.execute(
+            """
+            INSERT INTO paired_contracts (
+                pair_key, universe, category, match_name, event_date, canonical_event_id,
+                market_type, pm_yes_outcome, ks_yes_outcome, pm_event_slug, pm_market_id,
+                pm_token_id, ks_event_ticker, ks_market_ticker, match_format, schedule_source,
+                safe_paired, first_seen_ts, last_seen_ts
+            ) VALUES ('stale-pair', 'mlb', 'baseball', 'AAA vs BBB', '2026-06-29', 'mlb:aaa-bbb',
+                'game_winner', 'AAA', 'AAA', 'pm-event', 'pm-market',
+                'pm-stale', 'KS-EVENT', 'KS-STALE', 'game', 'unit-test', 1, ?, ?)
+            """,
+            (now, now),
+        )
+        pair_id = int(cursor.lastrowid)
+        pm_obs_id = old_market_db.record_orderbook_success(
+            self.conn,
+            "pm",
+            "pm-stale",
+            {
+                "timestamp": "1780000000",
+                "bids": [{"price": "0.60", "size": "10"}],
+                "asks": [{"price": "0.40", "size": "10"}],
+            },
+            now,
+            "/book",
+            None,
+            1,
+        )
+        ks_obs_id = old_market_db.record_orderbook_success(
+            self.conn,
+            "ks",
+            "KS-STALE",
+            {"orderbook_fp": {"yes_dollars": [["0.70", "8"]], "no_dollars": [["0.50", "8"]]}},
+            now,
+            "/markets/KS-STALE/orderbook",
+            1,
+            1,
+        )
+        pm_obs = self.conn.execute("SELECT * FROM orderbook_observations WHERE observation_id = ?", (pm_obs_id,)).fetchone()
+        ks_obs = self.conn.execute("SELECT * FROM orderbook_observations WHERE observation_id = ?", (ks_obs_id,)).fetchone()
+        self.conn.execute(
+            """
+            INSERT INTO edge_snapshots (
+                paired_contract_id, ts_utc, pm_observation_id, ks_observation_id,
+                pm_bid_scaled, pm_ask_scaled, pm_bid_size_scaled, pm_ask_size_scaled,
+                ks_bid_scaled, ks_ask_scaled, ks_bid_size_scaled, ks_ask_size_scaled,
+                best_leg, gross_cost_scaled, net_edge_scaled, best_leg_bbo_size_scaled,
+                net_profit_at_bbo_scaled, alert, alert_reason, book_age_seconds,
+                snapshot_skew_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                'PM_YES_KS_NO', 700000, 30000, 8000000, 240000, 'ALERT', 'net_edge_positive', 0, 0)
+            """,
+            (
+                pair_id,
+                now,
+                pm_obs_id,
+                ks_obs_id,
+                pm_obs["best_bid_scaled"],
+                pm_obs["best_ask_scaled"],
+                pm_obs["best_bid_size_scaled"],
+                pm_obs["best_ask_size_scaled"],
+                ks_obs["best_bid_scaled"],
+                ks_obs["best_ask_scaled"],
+                ks_obs["best_bid_size_scaled"],
+                ks_obs["best_ask_size_scaled"],
+            ),
+        )
+        self.conn.commit()
+
+        _pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.refresh_pairs_incremental(
+            self.conn,
+            sports="mlb",
+            from_date="2026-06-29",
+        )
+
+        self.assertEqual(counts["safe_pairs"], 0)
+        self.assertEqual(counts["disabled_pairs"], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM edge_snapshots").fetchone()[0], 1)
+        self.assertEqual(
+            self.conn.execute("SELECT safe_paired FROM paired_contracts WHERE paired_contract_id = ?", (pair_id,)).fetchone()[0],
+            0,
+        )
 
     def test_db_only_pairer_keeps_nba_and_wnba_city_aliases_separate(self) -> None:
         self.add_pm_binary_event(
@@ -422,7 +726,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="basketball,nba,wnba",
             from_date="2026-06-25",
@@ -459,7 +763,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="tennis",
             from_date="2026-06-24",
@@ -502,7 +806,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="tennis",
             from_date="2026-06-24",
@@ -535,7 +839,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="tennis",
             from_date="2026-06-29",
@@ -564,7 +868,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="tennis",
             from_date="2026-06-29",
@@ -618,7 +922,7 @@ class MarketDbTests(unittest.TestCase):
             )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="tennis",
             from_date="2026-06-29",
@@ -669,7 +973,7 @@ class MarketDbTests(unittest.TestCase):
             )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="tennis",
             from_date="2026-06-29",
@@ -702,7 +1006,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, diagnostics, warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, diagnostics, warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="tennis",
             from_date="2026-06-29",
@@ -730,7 +1034,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="cs2,esports",
             from_date="2026-06-29",
@@ -758,7 +1062,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, diagnostics, warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, diagnostics, warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="cs2,esports",
             from_date="2026-06-29",
@@ -802,22 +1106,22 @@ class MarketDbTests(unittest.TestCase):
                         "active": True,
                         "closed": False,
                         "enableOrderBook": True,
-                        "outcomes": market_db.json_text(outcomes),
-                        "clobTokenIds": market_db.json_text([f"token-{slug}-a", f"token-{slug}-b"]),
+                        "outcomes": old_market_db.json_text(outcomes),
+                        "clobTokenIds": old_market_db.json_text([f"token-{slug}-a", f"token-{slug}-b"]),
                     }
                 ],
             }
 
-        original_get_json = staging_collect_market_db.core.get_json
+        original_get_json = old_staging_collect_market_db.core.get_json
 
         def fake_get_json(_base_url, path, params, timeout=20):
             self.assertEqual(path, "/events")
             slug = params.get("slug")
             return [payloads[slug]] if slug in payloads else []
 
-        staging_collect_market_db.core.get_json = fake_get_json
+        old_staging_collect_market_db.core.get_json = fake_get_json
         try:
-            count = staging_collect_market_db.collect_pm_repair_metadata(
+            count = old_staging_collect_market_db.collect_pm_repair_metadata(
                 self.conn,
                 SimpleNamespace(
                     sports="all",
@@ -829,7 +1133,7 @@ class MarketDbTests(unittest.TestCase):
                 ),
             )
         finally:
-            staging_collect_market_db.core.get_json = original_get_json
+            old_staging_collect_market_db.core.get_json = original_get_json
 
         self.assertEqual(count, 3)
         slugs = {
@@ -856,7 +1160,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        pairs, _diagnostics, _warnings, counts = staging_pair_from_db.build_pairs_from_db(
+        pairs, _diagnostics, _warnings, counts = old_staging_pair_from_db.build_pairs_from_db(
             self.conn,
             sports="all",
             from_date="2026-06-24",
@@ -883,9 +1187,9 @@ class MarketDbTests(unittest.TestCase):
             ks_market_ticker="KXMLBGAME-26JUN241900AAABBB-AAA",
             schedule_source="fixture",
         )
-        market_db.upsert_paired_contract(self.conn, pair)
+        old_market_db.upsert_paired_contract(self.conn, pair)
         ts = datetime.now(timezone.utc).isoformat()
-        market_db.record_orderbook_success(
+        old_market_db.record_orderbook_success(
             self.conn,
             "pm",
             "pm-token",
@@ -899,7 +1203,7 @@ class MarketDbTests(unittest.TestCase):
             None,
             10,
         )
-        market_db.record_orderbook_success(
+        old_market_db.record_orderbook_success(
             self.conn,
             "ks",
             "KXMLBGAME-26JUN241900AAABBB-AAA",
@@ -916,7 +1220,7 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        rows, warnings = market_db.compute_edge_snapshots(self.conn, ignore_age=True)
+        rows, warnings = old_market_db.compute_edge_snapshots(self.conn, ignore_age=True)
         self.assertEqual(warnings, [])
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["alert"], "ALERT")
@@ -924,8 +1228,8 @@ class MarketDbTests(unittest.TestCase):
         self.assertEqual(rows[0]["net_edge"], "0.068163")
         self.assertEqual(rows[0]["best_leg_bbo_size"], "8")
         self.assertEqual(rows[0]["net_profit_at_bbo"], "0.545304")
-        validate_market_db.validate_pairs_and_edges(self.conn)
-        validate_market_db.validate_observations(self.conn)
+        old_validate_market_db.validate_pairs_and_edges(self.conn)
+        old_validate_market_db.validate_observations(self.conn)
 
     def test_zero_bbo_depth_skips_edge_and_alert(self) -> None:
         pair = core.PairedContract(
@@ -944,9 +1248,9 @@ class MarketDbTests(unittest.TestCase):
             ks_market_ticker="KXMLBGAME-26JUN241900AAABBB-AAA",
             schedule_source="fixture",
         )
-        market_db.upsert_paired_contract(self.conn, pair)
+        old_market_db.upsert_paired_contract(self.conn, pair)
         ts = datetime.now(timezone.utc).isoformat()
-        market_db.record_orderbook_success(
+        old_market_db.record_orderbook_success(
             self.conn,
             "pm",
             "pm-token",
@@ -960,7 +1264,7 @@ class MarketDbTests(unittest.TestCase):
             None,
             10,
         )
-        market_db.record_orderbook_success(
+        old_market_db.record_orderbook_success(
             self.conn,
             "ks",
             "KXMLBGAME-26JUN241900AAABBB-AAA",
@@ -977,12 +1281,12 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        rows, warnings = market_db.compute_edge_snapshots(self.conn, ignore_age=True)
+        rows, warnings = old_market_db.compute_edge_snapshots(self.conn, ignore_age=True)
 
         self.assertEqual(rows, [])
         self.assertTrue(any("non-executable BBO depth" in warning for warning in warnings))
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM edge_snapshots").fetchone()[0], 0)
-        validate_market_db.validate_pairs_and_edges(self.conn)
+        old_validate_market_db.validate_pairs_and_edges(self.conn)
 
     def test_stale_or_skewed_books_skip_edge_and_alert(self) -> None:
         pair = core.PairedContract(
@@ -1001,10 +1305,10 @@ class MarketDbTests(unittest.TestCase):
             ks_market_ticker="KXMLBGAME-26JUN241900AAABBB-AAA",
             schedule_source="fixture",
         )
-        market_db.upsert_paired_contract(self.conn, pair)
+        old_market_db.upsert_paired_contract(self.conn, pair)
         stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
         fresh_ts = datetime.now(timezone.utc).isoformat()
-        market_db.record_orderbook_success(
+        old_market_db.record_orderbook_success(
             self.conn,
             "pm",
             "pm-token",
@@ -1018,7 +1322,7 @@ class MarketDbTests(unittest.TestCase):
             None,
             10,
         )
-        market_db.record_orderbook_success(
+        old_market_db.record_orderbook_success(
             self.conn,
             "ks",
             "KXMLBGAME-26JUN241900AAABBB-AAA",
@@ -1035,12 +1339,12 @@ class MarketDbTests(unittest.TestCase):
         )
         self.conn.commit()
 
-        rows, warnings = market_db.compute_edge_snapshots(self.conn)
+        rows, warnings = old_market_db.compute_edge_snapshots(self.conn)
 
         self.assertEqual(rows, [])
         self.assertTrue(any("stale/skewed DB orderbook skipped" in warning for warning in warnings))
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM edge_snapshots").fetchone()[0], 0)
-        validate_market_db.validate_pairs_and_edges(self.conn)
+        old_validate_market_db.validate_pairs_and_edges(self.conn)
 
 
 if __name__ == "__main__":

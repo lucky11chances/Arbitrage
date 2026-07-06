@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import sys
 import tempfile
 import unittest
@@ -11,16 +12,16 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import market_db  # noqa: E402
-import staging_paper_trade_simulator as sim  # noqa: E402
+import old_market_db  # noqa: E402
+import old_staging_paper_trade_simulator as sim  # noqa: E402
 
 
 class PaperTradeSimulatorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "paper_trade.sqlite"
-        self.conn = market_db.connect(self.db_path)
-        market_db.init_db(self.conn)
+        self.conn = old_market_db.connect(self.db_path)
+        old_market_db.init_db(self.conn)
 
     def tearDown(self) -> None:
         self.conn.close()
@@ -51,7 +52,7 @@ class PaperTradeSimulatorTests(unittest.TestCase):
         bids: list[dict[str, str]] | None = None,
         asks: list[dict[str, str]] | None = None,
     ) -> int:
-        return market_db.record_orderbook_success(
+        return old_market_db.record_orderbook_success(
             self.conn,
             "pm",
             token_id,
@@ -74,7 +75,7 @@ class PaperTradeSimulatorTests(unittest.TestCase):
         yes_bids: list[list[str]] | None = None,
         no_bids: list[list[str]] | None = None,
     ) -> int:
-        return market_db.record_orderbook_success(
+        return old_market_db.record_orderbook_success(
             self.conn,
             "ks",
             ticker,
@@ -283,6 +284,73 @@ class PaperTradeSimulatorTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["reason"], "zero_t0_pm_bbo_size")
         self.assertEqual(rows[0]["t0_fill_shares"], Decimal("0"))
+
+    def test_db_output_rows_match_csv_output(self) -> None:
+        pair_id = self.add_pair()
+        pm_obs_id = self.add_pm_observation(
+            "pm-token",
+            "2026-06-29T00:00:00+00:00",
+            asks=[{"price": "0.40", "size": "10"}],
+        )
+        ks_obs_id = self.add_ks_observation(
+            "KS-MARKET-AAA",
+            "2026-06-29T00:00:01+00:00",
+            yes_bids=[["0.70", "5"]],
+        )
+        self.add_edge_snapshot(pair_id, pm_obs_id, ks_obs_id, sim.LEG_PM_YES_KS_NO)
+        self.conn.commit()
+        rows = sim.simulate(
+            self.conn,
+            min_net_edge=Decimal("0.02"),
+            notional=Decimal("100"),
+            max_notional=Decimal("100"),
+            latencies=[5],
+        )
+        summary_rows = sim.summarize(rows)
+        trade_csv = Path(self.tempdir.name) / "trades.csv"
+        summary_csv = Path(self.tempdir.name) / "summary.csv"
+
+        run_id = sim.write_db_outputs(
+            self.conn,
+            rows=rows,
+            summary_rows=summary_rows,
+            min_net_edge=Decimal("0.02"),
+            notional=Decimal("100"),
+            max_notional=Decimal("100"),
+            latencies=[5],
+            output_path=str(trade_csv),
+            summary_output_path=str(summary_csv),
+        )
+        sim.write_csv(rows, sim.TRADE_FIELDS, trade_csv)
+        sim.write_csv(summary_rows, sim.SUMMARY_FIELDS, summary_csv)
+
+        with trade_csv.open(newline="") as handle:
+            csv_rows = list(csv.DictReader(handle))
+        db_rows = self.conn.execute(
+            """
+            SELECT *
+            FROM paper_trade_results
+            WHERE paper_trade_run_id = ?
+            ORDER BY paper_trade_result_id
+            """,
+            (run_id,),
+        ).fetchall()
+        run = self.conn.execute(
+            "SELECT * FROM paper_trade_runs WHERE paper_trade_run_id = ?",
+            (run_id,),
+        ).fetchone()
+
+        self.assertEqual(len(db_rows), len(csv_rows))
+        self.assertEqual(db_rows[0]["reason"], csv_rows[0]["reason"])
+        self.assertEqual(db_rows[0]["t0_fill_shares"], csv_rows[0]["t0_fill_shares"])
+        self.assertEqual(run["result_count"], len(csv_rows))
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM paper_trade_summary WHERE paper_trade_run_id = ?",
+                (run_id,),
+            ).fetchone()[0],
+            len(summary_rows),
+        )
 
 
 if __name__ == "__main__":
